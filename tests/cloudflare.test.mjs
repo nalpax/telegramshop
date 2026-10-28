@@ -42,7 +42,7 @@ test('Durable Object SQLite adapter runs the store: payments, idempotency, refun
 // ---- worker host (server/worker-app.mjs) with a fake Telegram, through Web Request/Response like on Cloudflare ----
 import { createHmac } from 'node:crypto';
 import { Store } from '../server/store.mjs';
-import { WEBHOOK_PATH, isAppRoute, isPublicAsset, makeWorkerApp, webhookSecret, withSecurityHeaders } from '../server/worker-app.mjs';
+import { WEBHOOK_PATH, isAppRoute, isPublicAsset, makeWorkerApp, serveAsset, webhookSecret, withSecurityHeaders } from '../server/worker-app.mjs';
 
 const TOKEN = 'synthetic-test-token-not-a-credential';
 const APP = 'https://vibentry.example.workers.dev';
@@ -108,4 +108,14 @@ test('Worker routing: only public files, private paths and dot-files are refused
   const page = withSecurityHeaders(new Response('x', { headers: { 'Content-Type': 'text/html' } }), '/');
   assert.match(page.headers.get('content-security-policy'), /frame-ancestors/); assert.equal(page.headers.get('cache-control'), 'no-cache');
   assert.equal(withSecurityHeaders(new Response('x'), '/style.css').headers.get('cache-control'), 'public, max-age=300');
+});
+test('Worker: bundled public files are served with type and headers; anything else is 404', async () => {
+  const files = { '/index.html': { body: '<!doctype html>', type: 'text/html; charset=utf-8' }, '/assets/brand.png': { body: new Uint8Array([137, 80]).buffer, type: 'image/png' } };
+  const home = serveAsset(files, new Request(APP + '/'));
+  assert.equal(home.status, 200); assert.equal(await home.text(), '<!doctype html>'); assert.match(home.headers.get('content-type'), /text\/html/);
+  assert.match(home.headers.get('content-security-policy'), /default-src 'self'/);
+  const png = serveAsset(files, new Request(APP + '/assets/brand.png'));
+  assert.equal(png.headers.get('content-type'), 'image/png'); assert.equal((await png.arrayBuffer()).byteLength, 2);
+  assert.equal(await serveAsset(files, new Request(APP + '/', { method: 'HEAD' })).text(), '');
+  for (const miss of ['/missing.css', '/.env', '/data/lessons.json', '/server/worker.mjs']) assert.equal(serveAsset(files, new Request(APP + miss)).status, 404, miss);
 });

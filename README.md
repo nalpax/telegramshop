@@ -37,6 +37,9 @@ npm test      # серверные тесты; без внешних плате�
 
 ## Реальный Telegram
 
+**Основной хостинг — Cloudflare Workers** (`npm run deploy:cloudflare`), порядок запуска: раздел «Cloudflare» в [handoff/LAUNCH_CHECKLIST_RU.md](handoff/LAUNCH_CHECKLIST_RU.md). Шаги ниже описывают запуск на своём сервере.
+
+
 1. Создай бота через BotFather. Токен сохрани в локальном `.env` или секретах сервера. Не отправляй его в чат и не коммить.
 2. Скопируй `.env.example` в `.env`. Заполни `BOT_TOKEN`, `APP_URL` (публичный HTTPS), `REQUIRED_CHANNEL_ID` (например, @username публичного канала), `REQUIRED_CHANNEL_URL` и свой числовой `ADMIN_IDS`.
 3. Назначь бота администратором канала. `getChatMember` надёжно проверяет других пользователей, когда бот — администратор. Свой Telegram ID можно узнать командой `/id` после запуска бота, затем внести его в `ADMIN_IDS` и перезапустить сервер.

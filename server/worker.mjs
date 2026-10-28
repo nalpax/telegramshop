@@ -1,12 +1,13 @@
 // Cloudflare Workers entry (deployed by scripts/deploy-cloudflare.mjs). One Durable Object holds the SQLite database,
-// so payments, progress and limits are handled in one place, like the single Node process. public/ is served as static assets.
-// ./content-bundle.mjs is generated at deploy time from data/ and is never written to disk or committed.
+// so payments, progress and limits are handled in one place, like the single Node process.
+// ./content-bundle.mjs (from data/) and ./public-bundle.mjs (public/ files) are generated at deploy time, never written to disk or committed.
 import { DurableObject } from 'cloudflare:workers';
 import { StoreCore } from './store-core.mjs';
 import { durableSql } from './durable-sql.mjs';
 import { Telegram } from './telegram.mjs';
-import { isAppRoute, isPublicAsset, makeWorkerApp, withSecurityHeaders } from './worker-app.mjs';
+import { isAppRoute, makeWorkerApp, serveAsset, withSecurityHeaders } from './worker-app.mjs';
 import content from './content-bundle.mjs';
+import files from './public-bundle.mjs';
 
 export class VibentryApp extends DurableObject {
   constructor(ctx, env) {
@@ -23,7 +24,6 @@ export default {
     const { pathname } = new URL(request.url);
     if (isAppRoute(pathname)) return withSecurityHeaders(await env.APP.get(env.APP.idFromName('main')).fetch(request));
     if (!['GET', 'HEAD'].includes(request.method)) return withSecurityHeaders(Response.json({ error: 'Method not allowed' }, { status: 405 }));
-    if (!isPublicAsset(pathname)) return withSecurityHeaders(Response.json({ error: 'Not found' }, { status: 404 }));
-    return withSecurityHeaders(await env.ASSETS.fetch(request), pathname);
+    return serveAsset(files, request);
   },
 };

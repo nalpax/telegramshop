@@ -80,5 +80,12 @@ export function withSecurityHeaders(response, pathname = '') {
   if (response.ok && pathname && !pathname.startsWith('/api/')) result.headers.set('Cache-Control', pathname === '/' || pathname.endsWith('.html') ? 'no-cache' : 'public, max-age=300');
   return result;
 }
+// public/ is bundled into the script at deploy time (server/public-bundle.mjs): { '/index.html': { body, type } }.
+export function serveAsset(files, request) {
+  const { pathname } = new URL(request.url);
+  const file = isPublicAsset(pathname) && files[pathname === '/' ? '/index.html' : decodeURIComponent(pathname)];
+  if (!file) return withSecurityHeaders(Response.json({ error: 'Not found' }, { status: 404 }));
+  return withSecurityHeaders(new Response(request.method === 'HEAD' ? null : file.body, { headers: { 'Content-Type': file.type } }), pathname);
+}
 // Requests that belong to the single app object (state, payments, bot); everything else is a static file.
 export const isAppRoute = pathname => pathname.startsWith('/api/') || pathname === '/health' || pathname.startsWith('/telegram/');

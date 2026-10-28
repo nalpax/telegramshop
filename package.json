@@ -14,6 +14,7 @@
     "test": "node --test",
     "check": "node scripts/check.mjs",
     "check-links": "node scripts/check-links.mjs",
-    "trace-leak": "node scripts/trace-leak.mjs"
+    "trace-leak": "node scripts/trace-leak.mjs",
+    "deploy:cloudflare": "node --use-env-proxy scripts/deploy-cloudflare.mjs"
   }
 }
