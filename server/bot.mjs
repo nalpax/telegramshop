@@ -11,9 +11,9 @@ export function validateAppUrl(value) {
 }
 export function messageFor(command, appUrl, support = 'nalpax') {
   const safeSupport = /^[a-zA-Z0-9_]{5,32}$/.test(support) ? support : 'nalpax';
-  if (command === '/help') return { text: 'Vibentry — практический курс по вайбкодингу.\n\nОткрой мини-приложение, подпишись на канал и получи первый урок бесплатно.\n\n/start — открыть курс\n/support — связаться с автором\n/paysupport — вопросы об оплате', reply_markup: { inline_keyboard: [[{ text: 'Открыть Vibentry', web_app: { url: appUrl } }]] } };
-  if (['/support', '/paysupport'].includes(command)) return { text: `По вопросам курса, участия и оплаты напиши автору: @${safeSupport}.\n\nНе отправляй никому токены бота, пароли и платёжные данные.` };
-  return { text: 'Привет! Это Vibentry 🌱\n\nОт первого запроса к ИИ до своего сайта, портфолио и работы с клиентом.\n\nВнутри — 24 урока, промпты и рабочие шаблоны. Подпишись на канал и забери первый урок бесплатно.\n\nНачни с одной маленькой страницы.', reply_markup: { inline_keyboard: [[{ text: 'Начать бесплатно →', web_app: { url: appUrl } }], [{ text: 'Задать вопрос автору', url: `https://t.me/${safeSupport}` }]] } };
+  if (command === '/help') return { text: 'Vibentry — практический курс по вайбкодингу.\n\nОткройте мини-приложение, подпишитесь на канал и получите первый урок бесплатно.\n\n/start — открыть курс\n/support — связаться с автором\n/paysupport — вопросы об оплате', reply_markup: { inline_keyboard: [[{ text: 'Открыть Vibentry', web_app: { url: appUrl } }]] } };
+  if (['/support', '/paysupport'].includes(command)) return { text: `По вопросам курса, доступа и оплаты напишите автору: @${safeSupport}.\n\nНе отправляйте никому токены бота, пароли и платёжные данные.` };
+  return { text: 'Привет! Это Vibentry 🌱\n\nОт первого запроса к ИИ до своего сайта, портфолио и работы с клиентом.\n\nВнутри — 24 урока, 300 промптов и база материалов. Подпишитесь на канал и заберите первый урок бесплатно.\n\nНачните с одной маленькой страницы.', reply_markup: { inline_keyboard: [[{ text: 'Начать бесплатно →', web_app: { url: appUrl } }], [{ text: 'Написать автору', url: `https://t.me/${safeSupport}` }]] } };
 }
 async function run() {
   const token = process.env.BOT_TOKEN;
@@ -42,16 +42,20 @@ async function run() {
         for (const update of updates) {
           if (update.pre_checkout_query) {
             const ok = validCheckout(store, update.pre_checkout_query);
-            await api('answerPreCheckoutQuery', { pre_checkout_query_id: update.pre_checkout_query.id, ok, ...(ok ? {} : { error_message: 'Счёт недействителен. Открой приложение и создай новый счёт.' }) });
+            await api('answerPreCheckoutQuery', { pre_checkout_query_id: update.pre_checkout_query.id, ok, ...(ok ? {} : { error_message: 'Счёт недействителен. Откройте приложение и создайте новый счёт.' }) });
           } else if (update.message?.refunded_payment) {
             store.refund(update.message.refunded_payment.telegram_payment_charge_id);
           } else if (update.message?.successful_payment && update.message?.from?.id) {
             const ok = store.recordPayment(update.message.from.id, update.message.successful_payment);
-            if (!ok) console.error('Payment validation failed; access was not granted. Contact /paysupport.');
-            else await api('sendMessage', { chat_id: update.message.chat.id, text: 'Оплата получена! Все уроки Vibentry доступны в мини-приложении.', reply_markup: { inline_keyboard: [[{ text: 'Продолжить обучение →', web_app: { url: appUrl } }]] } });
+            if (!ok) {
+              console.error('Payment validation failed; access was not granted. Check the order and /paysupport.');
+              // The buyer must never be left without an answer after paying.
+              await api('sendMessage', { chat_id: update.message.chat.id, text: 'Платёж получен, но доступ не открылся автоматически. Не оплачивайте ещё раз: напишите автору через /paysupport, мы разберёмся.' }).catch(() => {});
+            }
+            else await api('sendMessage', { chat_id: update.message.chat.id, text: 'Оплата получена, спасибо! Все уроки, промпты и база материалов открыты в мини-приложении.', reply_markup: { inline_keyboard: [[{ text: 'Продолжить обучение →', web_app: { url: appUrl } }]] } });
           } else if (update.message?.chat?.type === 'private' && update.message.text) {
             const command = update.message.text.split(/\s/)[0].split('@')[0];
-            if (command === '/id') { await api('sendMessage', { chat_id: update.message.chat.id, text: 'Твой Telegram ID: ' + update.message.from.id }); offset = update.update_id + 1; continue; }
+            if (command === '/id') { await api('sendMessage', { chat_id: update.message.chat.id, text: 'Ваш Telegram ID: ' + update.message.from.id }); offset = update.update_id + 1; continue; }
             await api('sendMessage', { chat_id: update.message.chat.id, ...messageFor(command, appUrl, process.env.SUPPORT_USERNAME) });
           }
           offset = update.update_id + 1;

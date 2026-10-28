@@ -6,7 +6,8 @@ from playwright.sync_api import sync_playwright
 BASE_URL = os.environ.get('BASE_URL', 'http://127.0.0.1:3000')
 out = Path('artifacts'); out.mkdir(exist_ok=True)
 with sync_playwright() as p:
-    browser = p.chromium.launch(executable_path='/usr/bin/chromium', args=['--no-sandbox'])
+    chromium = os.environ.get('CHROMIUM_PATH')
+    browser = p.chromium.launch(**({'executable_path': chromium} if chromium else {}), args=['--no-sandbox'])
     for width, height in [(390, 844), (320, 740), (1280, 900)]:
         context = browser.new_context(viewport={'width': width, 'height': height}, device_scale_factor=1)
         page = context.new_page(); errors = []
@@ -38,10 +39,18 @@ with sync_playwright() as p:
         page.get_by_text('Пока ничего не нашлось').wait_for()
         page.get_by_role('searchbox').fill('')
         page.get_by_role('link', name='Промпты', exact=True).click()
-        page.locator('.resource-card').first.wait_for()
-        assert page.locator('.resource-card').count() > 0
+        page.locator('.prompt-card, .empty-state').first.wait_for()
+        page.get_by_role('link', name='База', exact=True).click()
+        page.locator('.base-row, .empty-state').first.wait_for()
+        if page.locator('[data-action="article"][data-id="start-how"]').count():  # only when the private library is installed
+            page.locator('[data-action="article"][data-id="start-how"]').click()
+            page.locator('.article-body').wait_for()
+            assert len(page.locator('.article-body').inner_text()) > 300
+            assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), 'Horizontal overflow in article'
+            page.evaluate("location.hash = '#home'")
+            page.get_by_role('link', name='Профиль', exact=True).wait_for()
         page.get_by_role('link', name='Профиль', exact=True).click()
-        page.get_by_text('Демо: прогресс сохраняется на этом устройстве.').wait_for()
+        page.get_by_text('Демо: прогресс сохраняется только на этом устройстве.').wait_for()
         assert not errors, errors
         context.close()
     # Admin and checkout UI fixtures only. These do not replace server authorization tests.
@@ -57,10 +66,13 @@ with sync_playwright() as p:
         configuration.update({'priceStars': 600, 'regularPriceStars': 750, 'discountPercent': 20})
         route.fulfill(json={'current': {'priceStars': 600, 'regularPriceStars': 750, 'discountPercent': 20, 'saleEndsAt': None}})
     page.route('**/api/admin/offer', offer_save)
+    overview = {'priceStars': 500, 'discountPercent': 0, 'saleEndsAt': None, 'current': {'priceStars': 500, 'regularPriceStars': 500, 'discountPercent': 0, 'saleEndsAt': None}, 'channels': [], 'effectiveChannels': [], 'promos': [], 'stats': {'users': 3, 'pro': 1, 'free': 2, 'revenue': 500, 'refunds': 0, 'new7': 2, 'conversion': 33.3, 'daily': {'start': 0, 'joined': [0] * 14, 'paid': [0] * 14}}}
+    page.route('**/api/admin/overview', lambda r: r.fulfill(json=overview))
     page.route('**/api/invoice', lambda r: r.fulfill(json={'url': 'https://t.me/$ui-fixture'}))
     page.goto(BASE_URL, wait_until='networkidle')
     page.get_by_role('link', name='Профиль', exact=True).click()
-    page.get_by_role('link', name='Управление ценой и акциями').click()
+    page.get_by_role('link', name='Админ-панель: участники, акции, каналы').click()
+    page.get_by_role('tab', name='Акции').click()
     page.locator('[name="priceStars"]').fill('750')
     page.locator('[name="discountPercent"]').fill('20')
     page.get_by_role('button', name='Сохранить цену').click()

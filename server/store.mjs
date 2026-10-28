@@ -12,9 +12,16 @@ export class Store {
       CREATE TABLE IF NOT EXISTS payments (charge_id TEXT PRIMARY KEY, order_id TEXT NOT NULL REFERENCES orders(id), user_id INTEGER NOT NULL, stars INTEGER NOT NULL, expires_at INTEGER, paid_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS progress (user_id INTEGER NOT NULL, lesson_id INTEGER NOT NULL, completed_at INTEGER NOT NULL, PRIMARY KEY(user_id,lesson_id));
       CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS refunds (charge_id TEXT PRIMARY KEY, refunded_at INTEGER NOT NULL);`);
+      CREATE TABLE IF NOT EXISTS refunds (charge_id TEXT PRIMARY KEY, refunded_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, first_name TEXT, last_name TEXT, username TEXT, language TEXT, first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS promo_codes (code TEXT PRIMARY KEY, percent INTEGER NOT NULL, max_uses INTEGER, used INTEGER NOT NULL DEFAULT 0, expires_at TEXT, active INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS audit (id INTEGER PRIMARY KEY AUTOINCREMENT, admin_id INTEGER NOT NULL, action TEXT NOT NULL, detail TEXT, at INTEGER NOT NULL);`);
+    const addColumn = (table, column, ddl) => { if (!this.db.prepare(`PRAGMA table_info(${table})`).all().some(c => c.name === column)) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`); };
+    addColumn('orders', 'promo', 'TEXT'); addColumn('orders', 'provider', "TEXT NOT NULL DEFAULT 'stars'"); addColumn('orders', 'currency', 'TEXT'); addColumn('orders', 'amount', 'REAL');
+    addColumn('payments', 'provider', "TEXT NOT NULL DEFAULT 'stars'"); addColumn('payments', 'amount', 'REAL'); addColumn('payments', 'currency', 'TEXT');
+    this.db.exec("CREATE TABLE IF NOT EXISTS provider_invoices (provider TEXT NOT NULL, external_id TEXT NOT NULL, order_id TEXT NOT NULL REFERENCES orders(id), created_at INTEGER NOT NULL, PRIMARY KEY(provider, external_id))");
   }
-  createOrder(userId, stars, mode) { const id = randomUUID(); this.db.prepare('INSERT INTO orders VALUES (?,?,?,?,?)').run(id, userId, stars, mode, Date.now()); return this.order(id); }
+  createOrder(userId, stars, mode, promo = null) { const id = randomUUID(); this.db.prepare('INSERT INTO orders (id,user_id,stars,mode,created_at,promo) VALUES (?,?,?,?,?,?)').run(id, userId, stars, mode, Date.now(), promo); return this.order(id); }
   order(id) { return this.db.prepare('SELECT * FROM orders WHERE id=?').get(id) || null; }
   entitlement(userId, now = Math.floor(Date.now() / 1000)) {
     const payment = this.db.prepare('SELECT * FROM payments WHERE user_id=? AND charge_id NOT IN (SELECT charge_id FROM refunds) AND (expires_at IS NULL OR expires_at>?) ORDER BY expires_at IS NULL DESC, expires_at DESC LIMIT 1').get(userId, now);
@@ -26,14 +33,97 @@ export class Store {
     const expiry = order.mode === 'subscription' ? payment.subscription_expiration_date : null;
     if (order.mode === 'subscription' && (!payment.is_recurring || !Number.isSafeInteger(expiry) || expiry <= now)) return false;
     // Idempotency: Telegram may deliver the same update again after a restart.
-    this.db.prepare('INSERT OR IGNORE INTO payments VALUES (?,?,?,?,?,?)').run(payment.telegram_payment_charge_id, order.id, userId, order.stars, expiry, now);
+    const inserted = this.db.prepare("INSERT OR IGNORE INTO payments (charge_id,order_id,user_id,stars,expires_at,paid_at,provider,amount,currency) VALUES (?,?,?,?,?,?,'stars',?,'XTR')").run(payment.telegram_payment_charge_id, order.id, userId, order.stars, expiry, now, order.stars).changes;
+    if (inserted && order.promo) this.db.prepare('UPDATE promo_codes SET used = used + 1 WHERE code = ?').run(order.promo);
     return true;
   }
+  // ---- external providers (Platega, CryptoBot, xRocket) ----
+  createExternalOrder(userId, provider, amount, currency, promo = null) {
+    const id = randomUUID();
+    this.db.prepare("INSERT INTO orders (id,user_id,stars,mode,created_at,promo,provider,currency,amount) VALUES (?,?,0,'one_time',?,?,?,?,?)").run(id, userId, Date.now(), promo, provider, currency, amount);
+    return this.order(id);
+  }
+  attachInvoice(provider, externalId, orderId) { this.db.prepare('INSERT OR IGNORE INTO provider_invoices VALUES (?,?,?,?)').run(provider, String(externalId), orderId, Date.now()); }
+  orderByInvoice(provider, externalId) { return this.db.prepare('SELECT o.* FROM provider_invoices i JOIN orders o ON o.id=i.order_id WHERE i.provider=? AND i.external_id=?').get(provider, String(externalId)) || null; }
+  invoiceForOrder(orderId) { return this.db.prepare('SELECT * FROM provider_invoices WHERE order_id=?').get(orderId) || null; }
+  orderPaid(orderId) { return !!this.db.prepare('SELECT 1 FROM payments WHERE order_id=?').get(orderId); }
+  // Called only after the provider itself confirmed the payment. Amount and currency must match what we asked for.
+  recordExternalPayment(provider, externalId, { amount, currency } = {}, now = Math.floor(Date.now() / 1000)) {
+    const order = this.orderByInvoice(provider, externalId);
+    if (!order || order.provider !== provider || order.currency !== currency || !Number.isFinite(amount) || Math.abs(amount - order.amount) > 0.005) return false;
+    const inserted = this.db.prepare('INSERT OR IGNORE INTO payments (charge_id,order_id,user_id,stars,expires_at,paid_at,provider,amount,currency) VALUES (?,?,?,0,NULL,?,?,?,?)').run(`${provider}:${externalId}`, order.id, order.user_id, now, provider, order.amount, order.currency).changes;
+    if (inserted && order.promo) this.db.prepare('UPDATE promo_codes SET used = used + 1 WHERE code = ?').run(order.promo);
+    return inserted ? 'new' : 'duplicate';
+  }
+  providerState() { try { return JSON.parse(this.db.prepare("SELECT value FROM settings WHERE key='providers'").get()?.value || '{}'); } catch { return {}; } }
+  saveProviderState(state) { this.db.prepare("INSERT INTO settings VALUES ('providers',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify(state)); }
   getProgress(userId) { return this.db.prepare('SELECT lesson_id FROM progress WHERE user_id=? ORDER BY lesson_id').all(userId).map(r => r.lesson_id); }
   complete(userId, lesson) { this.db.prepare('INSERT OR IGNORE INTO progress VALUES (?,?,?)').run(userId, lesson, Date.now()); }
   reset(userId) { this.db.prepare('DELETE FROM progress WHERE user_id=?').run(userId); }
   refund(chargeId) { if (typeof chargeId === 'string') this.db.prepare('INSERT OR IGNORE INTO refunds VALUES (?,?)').run(chargeId, Date.now()); }
   settings() { try { return JSON.parse(this.db.prepare("SELECT value FROM settings WHERE key='offer'").get()?.value || '{}'); } catch { return {}; } }
   saveSettings(value) { this.db.prepare("INSERT INTO settings VALUES ('offer',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify(value)); }
+  // ---- participants ----
+  upsertUser(user, now = Date.now()) {
+    if (!user || !Number.isSafeInteger(user.id)) return;
+    const clip = value => (typeof value === 'string' ? value.slice(0, 128) : null);
+    this.db.prepare(`INSERT INTO users (id,first_name,last_name,username,language,first_seen,last_seen) VALUES (?,?,?,?,?,?,?)
+      ON CONFLICT(id) DO UPDATE SET first_name=excluded.first_name,last_name=excluded.last_name,username=excluded.username,language=excluded.language,last_seen=excluded.last_seen`)
+      .run(user.id, clip(user.first_name), clip(user.last_name), clip(user.username), clip(user.language_code), now, now);
+  }
+  userRow(id) { return this.db.prepare('SELECT * FROM users WHERE id=?').get(id) || null; }
+  listUsers({ q = '', plan = 'all', limit = 25, offset = 0 } = {}) {
+    const like = `%${String(q).trim().replace(/[%_\\]/g, '')}%`;
+    const base = `SELECT u.*, (SELECT COUNT(*) FROM progress p WHERE p.user_id=u.id) AS done,
+      (SELECT COALESCE(SUM(stars),0) FROM payments y WHERE y.user_id=u.id AND y.charge_id NOT IN (SELECT charge_id FROM refunds)) AS stars,
+      EXISTS(SELECT 1 FROM payments y WHERE y.user_id=u.id AND y.charge_id NOT IN (SELECT charge_id FROM refunds)) AS pro FROM users u
+      WHERE (? = '%%' OR u.first_name LIKE ? OR u.last_name LIKE ? OR u.username LIKE ? OR CAST(u.id AS TEXT) LIKE ?)`;
+    const filtered = `SELECT * FROM (${base}) WHERE (? = 'all' OR (? = 'pro' AND pro = 1) OR (? = 'free' AND pro = 0))`;
+    const args = [like, like, like, like, like, plan, plan, plan];
+    const total = this.db.prepare(`SELECT COUNT(*) AS n FROM (${filtered})`).get(...args).n;
+    const items = this.db.prepare(`${filtered} ORDER BY last_seen DESC LIMIT ? OFFSET ?`).all(...args, Math.min(100, limit), Math.max(0, offset));
+    return { total, items };
+  }
+  userPayments(userId) {
+    return this.db.prepare('SELECT y.charge_id, y.stars, y.provider, y.amount, y.currency, y.paid_at, o.promo, (SELECT 1 FROM refunds r WHERE r.charge_id=y.charge_id) AS refunded FROM payments y JOIN orders o ON o.id=y.order_id WHERE y.user_id=? ORDER BY y.paid_at DESC').all(userId);
+  }
+  grantAccess(userId, now = Math.floor(Date.now() / 1000)) {
+    if (this.entitlement(userId, now).active) return false;
+    const order = this.createOrder(userId, 0, 'manual');
+    this.db.prepare("INSERT INTO payments (charge_id,order_id,user_id,stars,expires_at,paid_at,provider) VALUES (?,?,?,0,NULL,?,'manual')").run(`manual-${randomUUID()}`, order.id, userId, now);
+    return true;
+  }
+  revokeAccess(userId) {
+    const rows = this.db.prepare('SELECT charge_id FROM payments WHERE user_id=? AND charge_id NOT IN (SELECT charge_id FROM refunds)').all(userId);
+    for (const row of rows) this.refund(row.charge_id);
+    return rows.length;
+  }
+  payment(chargeId) { return this.db.prepare('SELECT * FROM payments WHERE charge_id=?').get(chargeId) || null; }
+  stats(now = Date.now()) {
+    const one = (sql, ...a) => this.db.prepare(sql).get(...a);
+    const active = "charge_id NOT IN (SELECT charge_id FROM refunds)";
+    const day = 86400000; const since = now - 13 * day;
+    const start = new Date(new Date(now).setHours(0, 0, 0, 0)).getTime() - 13 * day;
+    const bucket = ms => Math.floor((ms - start) / day);
+    const joined = Array(14).fill(0); const paid = Array(14).fill(0);
+    for (const r of this.db.prepare('SELECT first_seen FROM users WHERE first_seen >= ?').all(start)) { const i = bucket(r.first_seen); if (i >= 0 && i < 14) joined[i]++; }
+    for (const r of this.db.prepare(`SELECT paid_at FROM payments WHERE ${active} AND provider != 'manual' AND paid_at >= ?`).all(Math.floor(start / 1000))) { const i = bucket(r.paid_at * 1000); if (i >= 0 && i < 14) paid[i]++; }
+    const users = one('SELECT COUNT(*) AS n FROM users').n;
+    const pro = one(`SELECT COUNT(DISTINCT user_id) AS n FROM payments WHERE ${active}`).n;
+    return { users, pro, free: Math.max(0, users - pro), revenue: one(`SELECT COALESCE(SUM(stars),0) AS n FROM payments WHERE ${active}`).n, revenueBy: this.db.prepare(`SELECT currency, ROUND(SUM(amount),2) AS total, COUNT(*) AS n FROM payments WHERE ${active} AND currency IS NOT NULL GROUP BY currency`).all().map(r => ({ currency: r.currency, total: r.total, n: r.n })), refunds: one('SELECT COUNT(*) AS n FROM refunds').n, new7: one('SELECT COUNT(*) AS n FROM users WHERE first_seen >= ?', now - 7 * day).n, conversion: users ? Math.round(pro / users * 1000) / 10 : 0, daily: { start, joined, paid } };
+  }
+  // ---- channels, promo codes, audit ----
+  channels() { try { const v = JSON.parse(this.db.prepare("SELECT value FROM settings WHERE key='channels'").get()?.value || '[]'); return Array.isArray(v) ? v : []; } catch { return []; } }
+  saveChannels(list) { this.db.prepare("INSERT INTO settings VALUES ('channels',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify(list)); }
+  promos() { return this.db.prepare('SELECT * FROM promo_codes ORDER BY created_at DESC').all(); }
+  promo(code) { return this.db.prepare('SELECT * FROM promo_codes WHERE code=?').get(String(code || '').trim().toUpperCase()) || null; }
+  savePromo({ code, percent, maxUses = null, expiresAt = null, active = 1 }) {
+    this.db.prepare(`INSERT INTO promo_codes (code,percent,max_uses,expires_at,active,created_at) VALUES (?,?,?,?,?,?)
+      ON CONFLICT(code) DO UPDATE SET percent=excluded.percent,max_uses=excluded.max_uses,expires_at=excluded.expires_at,active=excluded.active`)
+      .run(code, percent, maxUses, expiresAt, active ? 1 : 0, Date.now());
+  }
+  deletePromo(code) { this.db.prepare('DELETE FROM promo_codes WHERE code=?').run(code); }
+  log(adminId, action, detail = '') { this.db.prepare('INSERT INTO audit (admin_id,action,detail,at) VALUES (?,?,?,?)').run(adminId, action, String(detail).slice(0, 500), Date.now()); }
+  auditLog(limit = 60) { return this.db.prepare('SELECT a.*, u.first_name, u.username FROM audit a LEFT JOIN users u ON u.id=a.admin_id ORDER BY a.id DESC LIMIT ?').all(limit); }
   close() { this.db.close(); }
 }

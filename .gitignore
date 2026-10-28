@@ -10,5 +10,7 @@ var/
 # Owner's paid course: local server inputs, never publish to GitHub.
 data/lessons.json
 data/resources.json
+data/prompts.json
+data/articles.json
 handoff/course/
 *.zip

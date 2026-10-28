@@ -63,11 +63,11 @@ test('Offers apply and expire deterministically, leaving existing purchases unch
   store.close();
 });
 test('API enforces channel membership, paid content and server-side price; private sources are not static', async () => {
-  const old = { ...process.env }; process.env.BOT_TOKEN = TOKEN; process.env.PRICE_STARS = '100'; process.env.REQUIRED_CHANNEL_ID = '@examplechannel'; process.env.REQUIRED_CHANNEL_URL = 'https://t.me/examplechannel'; process.env.ADMIN_IDS = '42';
+  const old = { ...process.env }; process.env.BOT_TOKEN = TOKEN; process.env.PRICE_STARS = '100'; process.env.REQUIRED_CHANNEL_ID = '@examplechannel'; process.env.REQUIRED_CHANNEL_URL = 'https://t.me/examplechannel'; process.env.ADMIN_IDS = '42'; process.env.MEMBERSHIP_CACHE_SECONDS = '0';
   const store = new Store(':memory:'); let member = false; let captured;
   const telegram = { isMember: async () => member, api: async (method, payload) => { captured = { method, payload }; return 'https://t.me/$test-invoice'; } };
   // Synthetic lessons keep tests runnable without publishing the owner's paid course.
-  const content = { lessons: Array.from({ length: 24 }, (_, i) => ({ id: i + 1, sections: [{ paragraphs: ['Synthetic fixture'] }] })), resources: { 'first-prompt': 'Synthetic prompt', 'mobile-prompt': 'Synthetic prompt', notes: 'Synthetic notes' } };
+  const content = { lessons: Array.from({ length: 24 }, (_, i) => ({ id: i + 1, sections: [{ paragraphs: ['Synthetic fixture'] }] })), resources: { 'first-prompt': 'Synthetic prompt', 'mobile-prompt': 'Synthetic prompt', notes: 'Synthetic notes' }, prompts: { categories: [{ id: 'c1', title: 'Synthetic', ids: ['001'] }], items: [{ id: '001', title: 'Synthetic title', use: 'Synthetic use', prompt: 'SYNTHETIC-PROMPT-TEXT' }] }, articles: [{ id: 'open-note', group: 'start', groupTitle: 'Start', title: 'Open', description: 'd', free: true, markdown: 'Free **text**' }, { id: 'paid-note', group: 'tools', groupTitle: 'Tools', title: 'Paid', description: 'd', markdown: 'SYNTHETIC-PAID-ARTICLE' }] };
   const server = createApp({ store, telegram, content }); await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
   const get = url => fetch(base + url, { headers: { 'X-Telegram-Init-Data': signed() } });
@@ -80,6 +80,15 @@ test('API enforces channel membership, paid content and server-side price; priva
     assert.equal((await get('/api/lessons/1')).status, 200);
     assert.equal((await get('/api/lessons/2')).status, 403);
     assert.equal((await get('/api/resources/first-prompt')).status, 403);
+    // Library: titles are listed after subscription; texts only after purchase.
+    const promptList = await (await get('/api/prompts')).json();
+    assert.equal(promptList.items.length, 1); assert.equal(JSON.stringify(promptList).includes('SYNTHETIC-PROMPT-TEXT'), false);
+    assert.equal((await get('/api/prompts/001')).status, 403);
+    const articleList = await (await get('/api/articles')).json();
+    assert.equal(articleList.items.length, 2); assert.equal(JSON.stringify(articleList).includes('SYNTHETIC-PAID-ARTICLE'), false);
+    assert.equal((await get('/api/articles/open-note')).status, 200);
+    assert.equal((await get('/api/articles/paid-note')).status, 403);
+    assert.equal((await get('/api/prompts/999')).status, 404);
     assert.equal((await post('/api/progress', { lessonId: 2 })).status, 403);
     assert.equal((await fetch(base + '/data/lessons.json')).status, 404);
     assert.equal((await fetch(base + '/handoff/course/Vibentry_Course_v02.pdf')).status, 404);
@@ -94,6 +103,9 @@ test('API enforces channel membership, paid content and server-side price; priva
     const otherAccount = await fetch(base + '/api/lessons/24', { headers: { 'X-Telegram-Init-Data': signed(99) } });
     assert.equal(otherAccount.status, 403);
     assert.equal((await get('/api/resources/first-prompt')).status, 200);
+    assert.equal((await (await get('/api/prompts/001')).json()).text, 'SYNTHETIC-PROMPT-TEXT');
+    assert.equal((await (await get('/api/articles/paid-note')).json()).markdown, 'SYNTHETIC-PAID-ARTICLE');
+    assert.equal((await fetch(base + '/api/prompts/001', { headers: { 'X-Telegram-Init-Data': signed(99) } })).status, 403);
     assert.equal((await post('/api/progress', { lessonId: 24 })).status, 200);
     assert.equal((await post('/api/session')).status, 200);
     assert.equal((await post('/api/admin/offer', { priceStars: 500, discountPercent: 20, saleEndsAt: null })).status, 200);
@@ -111,5 +123,23 @@ test('API enforces channel membership, paid content and server-side price; priva
       assert.equal(blockedInvoice.status, 503);
     } finally { await new Promise(resolve => incomplete.close(resolve)); }
     member = false; assert.equal((await get('/api/lessons/24')).status, 403);
+  } finally { await new Promise(resolve => server.close(resolve)); store.close(); for (const key of Object.keys(process.env)) if (!(key in old)) delete process.env[key]; Object.assign(process.env, old); }
+});
+
+test('Membership checks are cached briefly, failures are reported without granting access', async () => {
+  const old = { ...process.env }; process.env.BOT_TOKEN = TOKEN; process.env.REQUIRED_CHANNEL_ID = '@examplechannel'; process.env.MEMBERSHIP_CACHE_SECONDS = '60';
+  const store = new Store(':memory:'); let calls = 0; let fail = false;
+  const telegram = { isMember: async () => { calls++; if (fail) throw new Error('network'); return true; }, api: async () => 'x' };
+  const server = createApp({ store, telegram, content: { lessons: [{ id: 1, sections: [{ paragraphs: ['x'] }] }], resources: {}, prompts: { categories: [], items: [] }, articles: [] } });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`; const get = url => fetch(base + url, { headers: { 'X-Telegram-Init-Data': signed(7) } });
+  try {
+    assert.equal((await get('/api/lessons/1')).status, 200); assert.equal((await get('/api/lessons/1')).status, 200); assert.equal(calls, 1);
+    const fresh = await fetch(base + '/api/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ initData: signed(7) }) });
+    assert.equal(fresh.status, 200); assert.equal(calls, 2);
+    fail = true;
+    assert.equal((await get('/api/lessons/1')).status, 200);
+    process.env.MEMBERSHIP_CACHE_SECONDS = '0';
+    assert.equal((await get('/api/lessons/1')).status, 503);
   } finally { await new Promise(resolve => server.close(resolve)); store.close(); for (const key of Object.keys(process.env)) if (!(key in old)) delete process.env[key]; Object.assign(process.env, old); }
 });

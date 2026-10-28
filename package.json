@@ -12,6 +12,8 @@
     "start": "node --env-file-if-exists=.env --use-env-proxy server/index.mjs",
     "bot": "node --env-file-if-exists=.env --use-env-proxy server/bot.mjs",
     "test": "node --test",
-    "check": "node scripts/check.mjs"
+    "check": "node scripts/check.mjs",
+    "check-links": "node scripts/check-links.mjs",
+    "trace-leak": "node scripts/trace-leak.mjs"
   }
 }

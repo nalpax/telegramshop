@@ -8,5 +8,5 @@ for (const file of [...await walk('public/js'), ...await walk('server'), ...awai
 }
 for (const file of ['public/assets/brand.png', 'public/assets/hero.png', 'data/free-lessons.json']) await access(file);
 const data = JSON.parse(await readFile('data/free-lessons.json', 'utf8'));
-if (data.length !== 1 || data[0].id !== 1 || !data[0].sections.length) throw new Error('Exactly one real free lesson is required');
+if (data.length !== 1 || data[0].id !== 1 || !(data[0].sections?.length || data[0].markdown)) throw new Error('Exactly one real free lesson is required');
 console.log('Syntax, assets and the free lesson: OK. No build step required.');

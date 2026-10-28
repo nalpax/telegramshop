@@ -1,6 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import { validateInitData } from './auth.mjs';
-import { accessMode, isAdmin, offerFor } from './telegram.mjs';
+import { accessMode, applyPromo, channelsFor, isAdmin, normalizeChannel, offerFor, pricesFor } from './telegram.mjs';
+import { makeProviders } from './providers/index.mjs';
+import { fingerprint } from './fingerprint.mjs';
 async function readOptional(name, fallback) {
   try { return JSON.parse(await readFile(new URL(`../data/${name}`, import.meta.url), 'utf8')); }
   catch (error) { if (error.code === 'ENOENT') return fallback; throw error; }
@@ -8,47 +10,226 @@ async function readOptional(name, fallback) {
 const freeLessons = JSON.parse(await readFile(new URL('../data/free-lessons.json', import.meta.url), 'utf8'));
 const defaultLessons = await readOptional('lessons.json', freeLessons);
 const defaultResources = await readOptional('resources.json', {});
+const defaultPrompts = await readOptional('prompts.json', { categories: [], items: [] });
+const defaultArticles = await readOptional('articles.json', []);
 const userName = x => /^[a-zA-Z0-9_]{5,32}$/.test(x || '') ? x : 'nalpax';
-function channelUrl(value) { try { const u = new URL(value); return u.protocol === 'https:' && u.hostname === 't.me' && /^\/[a-zA-Z][a-zA-Z0-9_]{4,31}\/?$/.test(u.pathname) && !u.search && !u.hash ? u.toString() : null; } catch { return null; } }
-export function makeApi(store, telegram, { lessons = defaultLessons, resources = defaultResources } = {}) {
-  const contentReady = Array.from({ length: 24 }, (_, i) => i + 1).every(id => lessons.some(l => l.id === id && l.sections?.length)) && ['first-prompt', 'mobile-prompt', 'notes'].every(id => typeof resources[id] === 'string' && resources[id].length > 0);
+async function readRaw(request, limit = 20000) {
+  const chunks = []; let size = 0;
+  for await (const chunk of request) { size += chunk.length; if (size > limit) { const error = new Error('Payload too large'); error.status = 413; throw error; } chunks.push(chunk); }
+  return Buffer.concat(chunks).toString('utf8');
+}
+const currencyKey = { RUB: 'rub', USDT: 'usdt' };
+export function makeApi(store, telegram, { lessons = defaultLessons, resources = defaultResources, prompts = defaultPrompts, articles = defaultArticles, providers = makeProviders() } = {}) {
+  // Payment methods the buyer can pick right now: Stars (needs the bot token) plus every provider that is configured in .env,
+  // switched on in the admin panel and has a price in its currency.
+  function methodsFor(promoPercent = 0) {
+    const prices = pricesFor(store, promoPercent); const state = store.providerState(); const list = [];
+    if (process.env.BOT_TOKEN && prices.stars) list.push({ id: 'stars', title: 'Telegram Stars', symbol: '★', amount: prices.stars, regular: prices.regular.stars });
+    for (const provider of providers.list) {
+      const amount = prices[currencyKey[provider.currency]];
+      if (provider.configured() && state[provider.id] && amount) list.push({ id: provider.id, title: provider.title, symbol: provider.symbol, amount, regular: prices.regular[currencyKey[provider.currency]] });
+    }
+    return list;
+  }
+  // Scraping guard: a real reader opens a handful of pages; a script pulls everything in seconds.
+  const windows = new Map();
+  const limits = { content: 40, prompts: 200 };
+  function overLimit(userId, bucket) {
+    const key = `${bucket}:${userId}`; const now = Date.now(); const hits = (windows.get(key) || []).filter(time => now - time < 600000);
+    hits.push(now); windows.set(key, hits);
+    if (windows.size > 20000) windows.clear();
+    if (hits.length > limits[bucket]) { if (hits.length === limits[bucket] + 1) store.log(userId, 'rate-limit', bucket); return true; }
+    return false;
+  }
+  const settleThrottle = new Map();
+  async function settle(provider, externalId, hint = null) {
+    const order = store.orderByInvoice(provider.id, externalId);
+    if (!order) return 'unknown';
+    if (store.orderPaid(order.id)) return 'duplicate';
+    let status = await provider.fetchStatus(externalId);
+    if (!status) {
+      if (!hint?.paidHint) return 'pending';
+      if (hint.claimed?.payload && hint.claimed.payload !== order.id) return 'mismatch';
+      status = { paid: true, amount: hint.claimed?.amount, currency: hint.claimed?.currency };
+    }
+    if (!status.paid) return 'pending';
+    const result = store.recordExternalPayment(provider.id, externalId, status);
+    if (result === 'new') telegram.api('sendMessage', { chat_id: order.user_id, text: 'Оплата получена, спасибо! Все уроки, промпты и база материалов открыты в мини-приложении.' }).catch(() => {});
+    return result || 'mismatch';
+  }
+  const hasText = l => !!(l.sections?.length || l.markdown);
+  const promptIndex = new Map((prompts.items || []).map(item => [item.id, item]));
+  const articleIndex = new Map(articles.map(item => [item.id, item]));
+  // Positive membership checks are cached briefly so a busy app does not hit getChatMember on every request.
+  const members = new Map();
+  async function subscribedUser(userId, fresh = false) {
+    const hit = members.get(userId);
+    const ttl = Math.max(0, Number(process.env.MEMBERSHIP_CACHE_SECONDS ?? 60)) * 1000;
+    if (!fresh && hit && Date.now() - hit < ttl) return true;
+    const ok = await telegram.isMember(userId, channelsFor(store));
+    if (ok) { members.set(userId, Date.now()); if (members.size > 20000) members.clear(); } else members.delete(userId);
+    return ok;
+  }
+  const contentReady = Array.from({ length: 24 }, (_, i) => i + 1).every(id => lessons.some(l => l.id === id && hasText(l))) && ['first-prompt', 'mobile-prompt', 'notes'].every(id => typeof resources[id] === 'string' && resources[id].length > 0);
+  const promptList = () => ({ categories: prompts.categories || [], items: (prompts.items || []).map(({ id, title, use }) => ({ id, title, use })) });
+  const articleList = () => ({ items: articles.map(({ id, group, groupTitle, title, description, free }) => ({ id, group, groupTitle, title, description, free: !!free })) });
   const pending = new Set();
   const recent = new Map();
   return async function api(request, response, url, json, body) {
     if (!url.pathname.startsWith('/api/')) return false;
     const send = (status, data) => { json(response, status, data); return true; };
     const preview = !process.env.BOT_TOKEN && process.env.NODE_ENV !== 'production';
-    if (url.pathname === '/api/config' && request.method === 'GET') { const offer = offerFor(store); return send(200, { supportUsername: userName(process.env.SUPPORT_USERNAME), requiredChannelUrl: channelUrl(process.env.REQUIRED_CHANNEL_URL), ...offer, accessMode: accessMode(), paymentsEnabled: !!(contentReady && process.env.BOT_TOKEN && offer.priceStars && process.env.REQUIRED_CHANNEL_ID && channelUrl(process.env.REQUIRED_CHANNEL_URL)), preview, freeLessons: 1 }); }
-    const adminRoute = url.pathname === '/api/admin/offer';
+    const hook = url.pathname.match(/^\/api\/webhooks\/([a-z]+)$/);
+    if (hook && request.method === 'POST') {
+      const provider = providers.get(hook[1]);
+      if (!provider || !provider.configured()) return send(404, { error: 'Unknown provider' });
+      const event = provider.verifyWebhook({ headers: request.headers, rawBody: await readRaw(request) });
+      if (!event) return send(401, { error: 'Invalid signature' });
+      try { if (event.externalId) await settle(provider, event.externalId, event); } catch { return send(500, { error: 'Try again later' }); }
+      return send(200, { ok: true });
+    }
+    if (url.pathname === '/api/config' && request.method === 'GET') { const offer = offerFor(store); return send(200, { supportUsername: userName(process.env.SUPPORT_USERNAME), requiredChannelUrl: channelsFor(store)[0]?.url || null, requiredChannels: channelsFor(store).map(({ title, url }) => ({ title, url })), ...offer, accessMode: accessMode(), methods: methodsFor(), prices: pricesFor(store), paymentsEnabled: !!(contentReady && channelsFor(store).length > 0 && methodsFor().length > 0), preview, freeLessons: 1, library: { prompts: promptIndex.size, articles: articleIndex.size } }); }
+    const adminRoute = url.pathname.startsWith('/api/admin/');
     const lessonMatch = url.pathname.match(/^\/api\/lessons\/(\d+)$/);
     const resourceMatch = url.pathname.match(/^\/api\/resources\/([a-z-]+)$/);
-    const acceptedPost = ['/api/session', '/api/progress', '/api/invoice', '/api/admin/offer'].includes(url.pathname) && request.method === 'POST';
-    if (!acceptedPost && !((lessonMatch || resourceMatch || adminRoute) && request.method === 'GET')) return send(404, { error: 'Unknown API endpoint' });
+    const promptMatch = url.pathname.match(/^\/api\/prompts\/(\d{3})$/);
+    const articleMatch = url.pathname.match(/^\/api\/articles\/([a-z0-9-]+)$/);
+    const listRoute = ['/api/prompts', '/api/articles'].includes(url.pathname);
+    const orderMatch = url.pathname.match(/^\/api\/order\/([0-9a-f-]{36})$/);
+    const acceptedPost = (['/api/session', '/api/progress', '/api/invoice', '/api/promo'].includes(url.pathname) || url.pathname.startsWith('/api/admin/')) && request.method === 'POST';
+    if (!acceptedPost && !((lessonMatch || resourceMatch || promptMatch || articleMatch || listRoute || adminRoute || orderMatch) && request.method === 'GET')) return send(404, { error: 'Unknown API endpoint' });
     if (preview && url.pathname === '/api/session') return send(200, { preview: true, user: null, subscribed: false, access: { active: false }, done: [] });
     const data = acceptedPost ? await body(request) : {};
     const user = validateInitData(acceptedPost ? data.initData : request.headers['x-telegram-init-data'], process.env.BOT_TOKEN);
     const id = lessonMatch ? Number(lessonMatch[1]) : null;
     if (preview && id === 1) return send(200, lessons[0]);
+    // Design preview only (no BOT_TOKEN, not production): catalogue titles and the free article are readable.
+    if (preview && request.method === 'GET') {
+      if (url.pathname === '/api/prompts') return send(200, promptList());
+      if (url.pathname === '/api/articles') return send(200, articleList());
+      const sample = articleMatch && articleIndex.get(articleMatch[1]);
+      if (sample?.free) return send(200, { id: sample.id, title: sample.title, groupTitle: sample.groupTitle, markdown: sample.markdown });
+    }
     if (!user) return send(401, { error: 'Open the app from Telegram' });
     if (adminRoute) {
       if (!isAdmin(user.id)) return send(403, { error: 'Admin access required' });
-      if (request.method === 'GET') return send(200, { ...store.settings(), current: offerFor(store) });
-      if (!Number.isInteger(data.priceStars) || data.priceStars < 1 || data.priceStars > 999999 || !Number.isInteger(data.discountPercent) || data.discountPercent < 0 || data.discountPercent > 90 || (data.saleEndsAt && (!Number.isFinite(Date.parse(data.saleEndsAt)) || Date.parse(data.saleEndsAt) <= Date.now()))) return send(400, { error: 'Invalid price or sale parameters' });
-      store.saveSettings({ priceStars: data.priceStars, discountPercent: data.discountPercent, saleEndsAt: data.saleEndsAt || null });
-      return send(200, { ...store.settings(), current: offerFor(store) });
+      store.upsertUser(user);
+      const route = url.pathname.slice('/api/admin/'.length);
+      const get = request.method === 'GET';
+      const bad = message => send(400, { error: message });
+      const providerList = () => providers.list.map(p => ({ id: p.id, title: p.title, currency: p.currency, configured: p.configured(), enabled: !!store.providerState()[p.id], needsSandboxCheck: !!p.needsSandboxCheck, webhook: `${(process.env.APP_URL || '').replace(/\/$/, '')}/api/webhooks/${p.id}` }));
+      const overview = () => ({ ...store.settings(), current: offerFor(store), prices: pricesFor(store), methods: methodsFor(), providers: providerList(), channels: store.channels(), effectiveChannels: channelsFor(store), promos: store.promos(), stats: store.stats() });
+      if (route === 'offer') {
+        if (get) return send(200, { ...store.settings(), current: offerFor(store) });
+        if (!Number.isInteger(data.priceStars) || data.priceStars < 1 || data.priceStars > 999999 || !Number.isInteger(data.discountPercent) || data.discountPercent < 0 || data.discountPercent > 90 || (data.saleEndsAt && (!Number.isFinite(Date.parse(data.saleEndsAt)) || Date.parse(data.saleEndsAt) <= Date.now()))) return bad('Invalid price or sale parameters');
+        const optional = (value, min, max) => value === undefined || value === null || value === '' ? null : (Number.isFinite(Number(value)) && Number(value) >= min && Number(value) <= max ? Math.round(Number(value) * 100) / 100 : NaN);
+        const priceRub = optional(data.priceRub, 1, 9999999); const priceUsdt = optional(data.priceUsdt, 0.01, 99999);
+        if (Number.isNaN(priceRub) || Number.isNaN(priceUsdt)) return bad('Invalid price or sale parameters');
+        store.saveSettings({ priceStars: data.priceStars, priceRub, priceUsdt, discountPercent: data.discountPercent, saleEndsAt: data.saleEndsAt || null });
+        store.log(user.id, 'offer', `${data.priceStars}⭐ −${data.discountPercent}%`);
+        return send(200, { ...store.settings(), current: offerFor(store) });
+      }
+      if (route === 'overview' && get) return send(200, overview());
+      if (route === 'users' && get) {
+        const plan = ['all', 'free', 'pro'].includes(url.searchParams.get('plan')) ? url.searchParams.get('plan') : 'all';
+        const page = Math.max(0, Number.parseInt(url.searchParams.get('page') || '0', 10) || 0);
+        const result = store.listUsers({ q: (url.searchParams.get('q') || '').slice(0, 64), plan, limit: 20, offset: page * 20 });
+        return send(200, { total: result.total, page, pageSize: 20, items: result.items.map(row => ({ id: row.id, firstName: row.first_name, lastName: row.last_name, username: row.username, plan: row.pro ? 'pro' : 'free', stars: row.stars, done: row.done, firstSeen: row.first_seen, lastSeen: row.last_seen })) });
+      }
+      const userMatch = route.match(/^users\/(\d{1,15})$/);
+      if (userMatch && get) {
+        const row = store.userRow(Number(userMatch[1]));
+        if (!row) return send(404, { error: 'User not found' });
+        return send(200, { id: row.id, firstName: row.first_name, lastName: row.last_name, username: row.username, firstSeen: row.first_seen, lastSeen: row.last_seen, done: store.getProgress(row.id), plan: store.entitlement(row.id).active ? 'pro' : 'free', payments: store.userPayments(row.id).map(p => ({ provider: p.provider, amount: p.amount, currency: p.currency, chargeId: p.charge_id.startsWith('manual-') ? 'manual' : p.charge_id.slice(0, 12) + '…', stars: p.stars, paidAt: p.paid_at, promo: p.promo, refunded: !!p.refunded, manual: p.charge_id.startsWith('manual-') })) });
+      }
+      if (get && route === 'audit') return send(200, { items: store.auditLog().map(a => ({ at: a.at, admin: a.username ? '@' + a.username : a.first_name || String(a.admin_id), action: a.action, detail: a.detail })) });
+      if (get) return send(404, { error: 'Unknown API endpoint' });
+      if (route === 'grant' || route === 'revoke') {
+        if (!Number.isSafeInteger(data.userId) || !store.userRow(data.userId)) return bad('Unknown user');
+        const changed = route === 'grant' ? store.grantAccess(data.userId) : store.revokeAccess(data.userId);
+        store.log(user.id, route, `user ${data.userId}`);
+        return send(200, { changed: !!changed, plan: store.entitlement(data.userId).active ? 'pro' : 'free' });
+      }
+      if (route === 'channels') {
+        if (!Array.isArray(data.channels) || data.channels.length > 5) return bad('До 5 каналов или чатов');
+        const list = data.channels.map(normalizeChannel);
+        if (list.some(c => !c)) return bad('Проверьте ссылку (https://t.me/имя или приглашение) и ID чата (@имя или -100…)');
+        if (new Set(list.map(c => c.chatId)).size !== list.length) return bad('Один и тот же чат указан дважды');
+        store.saveChannels(list);
+        store.log(user.id, 'channels', list.map(c => c.chatId).join(', ') || 'пусто');
+        return send(200, overview());
+      }
+      if (route === 'channels/check') {
+        const normal = normalizeChannel(data);
+        if (!normal) return bad('Некорректная ссылка или ID');
+        try { const chat = await telegram.api('getChat', { chat_id: normal.chatId }); const me = await telegram.api('getMe'); const admin = await telegram.api('getChatMember', { chat_id: normal.chatId, user_id: me.id }); return send(200, { ok: ['administrator', 'creator'].includes(admin.status), title: chat.title || normal.title, status: admin.status }); }
+        catch { return send(200, { ok: false, status: 'unreachable' }); }
+      }
+      if (route === 'providers') {
+        const provider = providers.get(String(data.id || ''));
+        if (!provider) return bad('Unknown provider');
+        if (data.enabled === true && !provider.configured()) return bad('Сначала добавьте ключи этого провайдера в .env на сервере и перезапустите его');
+        store.saveProviderState({ ...store.providerState(), [provider.id]: data.enabled === true });
+        store.log(user.id, 'provider', `${provider.id} ${data.enabled === true ? 'on' : 'off'}`);
+        return send(200, overview());
+      }
+      if (route === 'promos') {
+        const code = String(data.code || '').trim().toUpperCase();
+        if (data.remove === true) { store.deletePromo(code); store.log(user.id, 'promo-delete', code); return send(200, overview()); }
+        const maxUses = data.maxUses === null || data.maxUses === '' || data.maxUses === undefined ? null : Number(data.maxUses);
+        if (!/^[A-Z0-9_-]{3,24}$/.test(code) || !Number.isInteger(data.percent) || data.percent < 1 || data.percent > 90 || (maxUses !== null && (!Number.isInteger(maxUses) || maxUses < 1 || maxUses > 1000000)) || (data.expiresAt && (!Number.isFinite(Date.parse(data.expiresAt)) || Date.parse(data.expiresAt) <= Date.now()))) return bad('Код: 3–24 символа A–Z, 0–9, _ или -; скидка 1–90%');
+        store.savePromo({ code, percent: data.percent, maxUses, expiresAt: data.expiresAt || null, active: data.active !== false });
+        store.log(user.id, 'promo', `${code} −${data.percent}%`);
+        return send(200, overview());
+      }
+      return send(404, { error: 'Unknown API endpoint' });
     }
-    const subscribed = await telegram.isMember(user.id);
+    if (url.pathname === '/api/session') store.upsertUser(user);
+    let subscribed;
+    try { subscribed = await subscribedUser(user.id, url.pathname === '/api/session'); }
+    catch { return send(503, { error: 'Subscription check is temporarily unavailable', reason: 'telegram' }); }
     const access = store.entitlement(user.id);
     if (url.pathname === '/api/session') return send(200, { user, subscribed, access, done: store.getProgress(user.id), isAdmin: isAdmin(user.id) });
     if (!subscribed) return send(403, { error: 'Channel subscription required', reason: 'channel' });
+    if (orderMatch) {
+      const order = store.order(orderMatch[1]);
+      if (!order || order.user_id !== user.id) return send(404, { error: 'Order not found' });
+      let paid = store.orderPaid(order.id);
+      const provider = providers.get(order.provider); const row = store.invoiceForOrder(order.id);
+      // Fallback for a missed webhook: ask the provider at most every 3 seconds per order.
+      if (!paid && provider && row && Date.now() - (settleThrottle.get(order.id) || 0) > 3000) {
+        settleThrottle.set(order.id, Date.now()); if (settleThrottle.size > 5000) settleThrottle.clear();
+        try { await settle(provider, row.external_id); paid = store.orderPaid(order.id); } catch {}
+      }
+      return send(200, { paid });
+    }
+    if (url.pathname === '/api/prompts') return send(200, promptList());
+    if (url.pathname === '/api/articles') return send(200, articleList());
+    if (promptMatch) {
+      const item = promptIndex.get(promptMatch[1]);
+      if (!item) return send(404, { error: 'Prompt not found' });
+      if (!access.active) return send(403, { error: 'Purchase required', reason: 'payment' });
+      if (overLimit(user.id, 'prompts')) return send(429, { error: 'Слишком много запросов подряд. Подождите несколько минут.' });
+      return send(200, { id: item.id, title: item.title, use: item.use, text: item.prompt });
+    }
+    if (articleMatch) {
+      const item = articleIndex.get(articleMatch[1]);
+      if (!item) return send(404, { error: 'Article not found' });
+      if (!item.free && !access.active) return send(403, { error: 'Purchase required', reason: 'payment' });
+      if (overLimit(user.id, 'content')) return send(429, { error: 'Слишком много запросов подряд. Подождите несколько минут.' });
+      return send(200, { id: item.id, title: item.title, groupTitle: item.groupTitle, markdown: fingerprint(item.markdown, user.id) });
+    }
     if (resourceMatch) {
       if (!access.active) return send(403, { error: 'Purchase required', reason: 'payment' });
+      if (overLimit(user.id, 'prompts')) return send(429, { error: 'Слишком много запросов подряд. Подождите несколько минут.' });
       return resources[resourceMatch[1]] ? send(200, { text: resources[resourceMatch[1]] }) : send(404, { error: 'Material not found' });
     }
     if (lessonMatch) {
       if (!lessons[id - 1]) return send(404, { error: 'Lesson not found' });
       if (id > 1 && !access.active) return send(403, { error: 'Purchase required', reason: 'payment' });
-      return send(200, lessons[id - 1]);
+      if (overLimit(user.id, 'content')) return send(429, { error: 'Слишком много запросов подряд. Подождите несколько минут.' });
+      const lesson = lessons[id - 1];
+      return send(200, lesson.markdown ? { ...lesson, markdown: fingerprint(lesson.markdown, user.id), ...(lesson.task ? { task: fingerprint(lesson.task, user.id) } : {}) } : lesson);
     }
     if (url.pathname === '/api/progress') {
       if (data.reset === true) store.reset(user.id);
@@ -59,21 +240,40 @@ export function makeApi(store, telegram, { lessons = defaultLessons, resources =
       }
       return send(200, { done: store.getProgress(user.id) });
     }
-    const price = offerFor(store).priceStars;
-    if (!contentReady || !price || !channelUrl(process.env.REQUIRED_CHANNEL_URL)) return send(503, { error: 'Course content, price or channel not configured' });
+    // ---- checkout ----
+    let promoCode = null; let promoPercent = 0;
+    if (url.pathname === '/api/promo' || (typeof data.promo === 'string' && data.promo.trim())) {
+      const result = applyPromo(store, data.promo, 100);
+      if (result.error) return send(400, { error: result.error });
+      promoCode = result.code; promoPercent = result.percent;
+      if (url.pathname === '/api/promo') return send(200, { code: promoCode, percent: promoPercent, methods: methodsFor(promoPercent) });
+    }
+    if (url.pathname === '/api/promo') return send(400, { error: 'Введите промокод' });
+    const wanted = typeof data.method === 'string' ? data.method : 'stars';
+    const method = methodsFor(promoPercent).find(m => m.id === wanted);
+    if (!contentReady || !method || !channelsFor(store).length) return send(503, { error: 'Course content, price, payment method or channel not configured' });
     if (access.active) return send(409, { error: 'Access already active' });
     if (pending.has(user.id) || Date.now() - (recent.get(user.id) || 0) < 10000) return send(429, { error: 'Please wait before creating another invoice' });
     pending.add(user.id);
+    const description = `Все 24 урока, ${promptIndex.size} промптов и база материалов. Разовая покупка для вашего аккаунта Telegram.`;
     try {
-      const mode = accessMode();
-      const order = store.createOrder(user.id, price, mode);
-      const link = await telegram.api('createInvoiceLink', {
-        title: 'Vibentry — полный курс', description: 'Все 24 урока и материалы курса. Разовая покупка навсегда для твоего аккаунта Telegram.',
-        payload: order.id, provider_token: '', currency: 'XTR', prices: [{ label: 'Полный доступ', amount: price }],
-      });
+      let result;
+      if (method.id === 'stars') {
+        const order = store.createOrder(user.id, method.amount, accessMode(), promoCode);
+        const link = await telegram.api('createInvoiceLink', { title: 'Vibentry — полный доступ', description, payload: order.id, provider_token: '', currency: 'XTR', prices: [{ label: 'Полный доступ', amount: method.amount }] });
+        result = { url: link, method: 'stars' };
+      } else {
+        const provider = providers.get(method.id);
+        const order = store.createExternalOrder(user.id, provider.id, method.amount, provider.currency, promoCode);
+        const home = process.env.APP_URL || (process.env.BOT_USERNAME ? `https://t.me/${process.env.BOT_USERNAME.replace(/^@/, '')}` : 'https://t.me');
+        const { externalId, payUrl } = await provider.createInvoice({ order, urls: { success: home, fail: home } });
+        store.attachInvoice(provider.id, externalId, order.id);
+        result = { url: payUrl, method: provider.id, orderId: order.id };
+      }
       recent.set(user.id, Date.now());
       if (recent.size > 10000) for (const [key, time] of recent) if (Date.now() - time > 60000) recent.delete(key);
-      return send(200, { url: link });
-    } finally { pending.delete(user.id); }
+      return send(200, result);
+    } catch (error) { if (method.id !== 'stars') return send(502, { error: 'Payment provider is unavailable' }); throw error; }
+    finally { pending.delete(user.id); }
   };
 }
