@@ -4,17 +4,9 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { Store } from './store.mjs';
-import { validCheckout } from './telegram.mjs';
+import { configureBot, handleUpdate, validateAppUrl } from './bot-core.mjs';
+export { messageFor, validateAppUrl } from './bot-core.mjs';
 
-export function validateAppUrl(value) {
-  try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password && !!url.hostname && !['localhost', '127.0.0.1'].includes(url.hostname); } catch { return false; }
-}
-export function messageFor(command, appUrl, support = 'nalpax') {
-  const safeSupport = /^[a-zA-Z0-9_]{5,32}$/.test(support) ? support : 'nalpax';
-  if (command === '/help') return { text: 'Vibentry — практический курс по вайбкодингу.\n\nОткройте мини-приложение, подпишитесь на канал и получите первый урок бесплатно.\n\n/start — открыть курс\n/support — связаться с автором\n/paysupport — вопросы об оплате', reply_markup: { inline_keyboard: [[{ text: 'Открыть Vibentry', web_app: { url: appUrl } }]] } };
-  if (['/support', '/paysupport'].includes(command)) return { text: `По вопросам курса, доступа и оплаты напишите автору: @${safeSupport}.\n\nНе отправляйте никому токены бота, пароли и платёжные данные.` };
-  return { text: 'Привет! Это Vibentry 🌱\n\nОт первого запроса к ИИ до своего сайта, портфолио и работы с клиентом.\n\nВнутри — 24 урока, 300 промптов и база материалов. Подпишитесь на канал и заберите первый урок бесплатно.\n\nНачните с одной маленькой страницы.', reply_markup: { inline_keyboard: [[{ text: 'Начать бесплатно →', web_app: { url: appUrl } }], [{ text: 'Написать автору', url: `https://t.me/${safeSupport}` }]] } };
-}
 async function run() {
   const token = process.env.BOT_TOKEN;
   const appUrl = process.env.APP_URL;
@@ -31,8 +23,7 @@ async function run() {
     const me = await api('getMe');
     const webhook = await api('getWebhookInfo');
     if (webhook.url) { console.error('This bot has a webhook configured. Use its existing deployment or remove the webhook deliberately before running polling.'); process.exitCode = 1; return; }
-    await api('setMyCommands', { commands: [{ command: 'start', description: 'Открыть курс' }, { command: 'help', description: 'Как всё устроено' }, { command: 'support', description: 'Написать автору' }, { command: 'paysupport', description: 'Вопросы об оплате' }, { command: 'id', description: 'Мой Telegram ID' }] });
-    await api('setChatMenuButton', { menu_button: { type: 'web_app', text: 'Vibentry', web_app: { url: appUrl } } });
+    await configureBot(api, appUrl);
     const store = new Store();
     console.log(`Vibentry bot @${me.username}: polling started. Telegram Stars handler enabled.`);
     let offset = 0;
@@ -40,24 +31,7 @@ async function run() {
       try {
         const updates = await api('getUpdates', { offset, timeout: 25, allowed_updates: ['message', 'pre_checkout_query'] }, 35000);
         for (const update of updates) {
-          if (update.pre_checkout_query) {
-            const ok = validCheckout(store, update.pre_checkout_query);
-            await api('answerPreCheckoutQuery', { pre_checkout_query_id: update.pre_checkout_query.id, ok, ...(ok ? {} : { error_message: 'Счёт недействителен. Откройте приложение и создайте новый счёт.' }) });
-          } else if (update.message?.refunded_payment) {
-            store.refund(update.message.refunded_payment.telegram_payment_charge_id);
-          } else if (update.message?.successful_payment && update.message?.from?.id) {
-            const ok = store.recordPayment(update.message.from.id, update.message.successful_payment);
-            if (!ok) {
-              console.error('Payment validation failed; access was not granted. Check the order and /paysupport.');
-              // The buyer must never be left without an answer after paying.
-              await api('sendMessage', { chat_id: update.message.chat.id, text: 'Платёж получен, но доступ не открылся автоматически. Не оплачивайте ещё раз: напишите автору через /paysupport, мы разберёмся.' }).catch(() => {});
-            }
-            else await api('sendMessage', { chat_id: update.message.chat.id, text: 'Оплата получена, спасибо! Все уроки, промпты и база материалов открыты в мини-приложении.', reply_markup: { inline_keyboard: [[{ text: 'Продолжить обучение →', web_app: { url: appUrl } }]] } });
-          } else if (update.message?.chat?.type === 'private' && update.message.text) {
-            const command = update.message.text.split(/\s/)[0].split('@')[0];
-            if (command === '/id') { await api('sendMessage', { chat_id: update.message.chat.id, text: 'Ваш Telegram ID: ' + update.message.from.id }); offset = update.update_id + 1; continue; }
-            await api('sendMessage', { chat_id: update.message.chat.id, ...messageFor(command, appUrl, process.env.SUPPORT_USERNAME) });
-          }
+          await handleUpdate(update, { api, store, appUrl });
           offset = update.update_id + 1;
         }
       } catch (error) {
