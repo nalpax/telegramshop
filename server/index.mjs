@@ -5,6 +5,9 @@ import path from 'node:path';
 import { Store } from './store.mjs';
 import { Telegram } from './telegram.mjs';
 import { makeApi } from './api.mjs';
+import { loadContent } from './content-node.mjs';
+
+const nodeContent = await loadContent();
 
 const publicRoot = path.resolve(fileURLToPath(new URL('../public/', import.meta.url)));
 const mime = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.json': 'application/json; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.webp': 'image/webp', '.ico': 'image/x-icon' };
@@ -12,7 +15,7 @@ function json(response, status, value) { response.writeHead(status, { 'Content-T
 async function body(request) { const chunks = []; let size = 0; for await (const chunk of request) { size += chunk.length; if (size > 20000) { const error = new Error('Payload too large'); error.status = 413; throw error; } chunks.push(chunk); } return JSON.parse(Buffer.concat(chunks).toString() || '{}'); }
 
 export function createApp({ store = new Store(), telegram = new Telegram(), content } = {}) {
-  const api = makeApi(store, telegram, content);
+  const api = makeApi(store, telegram, { ...nodeContent, ...content });
   return http.createServer(async (request, response) => {
     response.setHeader('X-Content-Type-Options', 'nosniff');
     response.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');

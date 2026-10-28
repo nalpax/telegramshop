@@ -1,17 +1,8 @@
-import { readFile } from 'node:fs/promises';
 import { validateInitData } from './auth.mjs';
 import { accessMode, applyPromo, channelsFor, isAdmin, normalizeChannel, offerFor, pricesFor } from './telegram.mjs';
 import { makeProviders } from './providers/index.mjs';
 import { fingerprint } from './fingerprint.mjs';
-async function readOptional(name, fallback) {
-  try { return JSON.parse(await readFile(new URL(`../data/${name}`, import.meta.url), 'utf8')); }
-  catch (error) { if (error.code === 'ENOENT') return fallback; throw error; }
-}
-const freeLessons = JSON.parse(await readFile(new URL('../data/free-lessons.json', import.meta.url), 'utf8'));
-const defaultLessons = await readOptional('lessons.json', freeLessons);
-const defaultResources = await readOptional('resources.json', {});
-const defaultPrompts = await readOptional('prompts.json', { categories: [], items: [] });
-const defaultArticles = await readOptional('articles.json', []);
+// Course content is passed in by the host: server/content-node.mjs reads data/ for Node, the Cloudflare build bundles it.
 const userName = x => /^[a-zA-Z0-9_]{5,32}$/.test(x || '') ? x : 'nalpax';
 async function readRaw(request, limit = 20000) {
   const chunks = []; let size = 0;
@@ -19,7 +10,7 @@ async function readRaw(request, limit = 20000) {
   return Buffer.concat(chunks).toString('utf8');
 }
 const currencyKey = { RUB: 'rub', USDT: 'usdt' };
-export function makeApi(store, telegram, { lessons = defaultLessons, resources = defaultResources, prompts = defaultPrompts, articles = defaultArticles, providers = makeProviders() } = {}) {
+export function makeApi(store, telegram, { lessons = [], resources = {}, prompts = { categories: [], items: [] }, articles = [], providers = makeProviders() } = {}) {
   // Payment methods the buyer can pick right now: Stars (needs the bot token) plus every provider that is configured in .env,
   // switched on in the admin panel and has a price in its currency.
   function methodsFor(promoPercent = 0) {
