@@ -1,0 +1,14 @@
+.env
+.env.*
+!.env.example
+node_modules/
+artifacts/
+*.log
+var/
+.DS_Store
+
+# Owner's paid course: local server inputs, never publish to GitHub.
+data/lessons.json
+data/resources.json
+handoff/course/
+*.zip
