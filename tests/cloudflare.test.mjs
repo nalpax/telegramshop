@@ -38,3 +38,74 @@ test('Durable Object SQLite adapter runs the store: payments, idempotency, refun
   assert.equal(store.revokeAccess(7), 1); assert.equal(store.entitlement(7).active, false);
   assert.equal(store.grantAccess(7), true); assert.equal(store.entitlement(7).active, true);
 });
+
+// ---- worker host (server/worker-app.mjs) with a fake Telegram, through Web Request/Response like on Cloudflare ----
+import { createHmac } from 'node:crypto';
+import { Store } from '../server/store.mjs';
+import { WEBHOOK_PATH, isAppRoute, isPublicAsset, makeWorkerApp, webhookSecret, withSecurityHeaders } from '../server/worker-app.mjs';
+
+const TOKEN = 'synthetic-test-token-not-a-credential';
+const APP = 'https://vibentry.example.workers.dev';
+function signed(id = 42) {
+  const data = new URLSearchParams({ auth_date: String(Math.floor(Date.now() / 1000)), user: JSON.stringify({ id, first_name: 'Пользователь' }), query_id: 'test' });
+  const check = [...data].sort(([a], [b]) => a < b ? -1 : 1).map(([k, v]) => `${k}=${v}`).join('\n');
+  data.set('hash', createHmac('sha256', createHmac('sha256', 'WebAppData').update(TOKEN).digest()).update(check).digest('hex'));
+  return data.toString();
+}
+function workerHarness({ webhookUrl = '' } = {}) {
+  Object.assign(process.env, { BOT_TOKEN: TOKEN, NODE_ENV: 'production', MEMBERSHIP_CACHE_SECONDS: '0', REQUIRED_CHANNEL_ID: '@examplechannel', REQUIRED_CHANNEL_URL: 'https://t.me/examplechannel' });
+  const calls = []; const store = new Store(':memory:');
+  const telegram = { isMember: async () => true, api: async (method, payload) => { calls.push({ method, payload }); return method === 'getWebhookInfo' ? { url: webhookUrl } : true; } };
+  const content = { lessons: Array.from({ length: 24 }, (_, i) => ({ id: i + 1, sections: [{ paragraphs: ['Synthetic fixture'] }] })) };
+  const handle = makeWorkerApp({ store, telegram, content, env: { BOT_TOKEN: TOKEN, APP_URL: APP + '/' }, log: () => {} });
+  return { calls, store, handle };
+}
+const hook = (update, secret = webhookSecret(TOKEN)) => new Request(APP + WEBHOOK_PATH, { method: 'POST', headers: { 'Content-Type': 'application/json', ...(secret ? { 'X-Telegram-Bot-Api-Secret-Token': secret } : {}) }, body: JSON.stringify(update) });
+
+test('Worker: webhook needs the derived secret; a paid update grants access once', async () => {
+  const t = workerHarness(); const order = t.store.createOrder(42, 50, 'one_time');
+  const update = { update_id: 1, message: { chat: { id: 42, type: 'private' }, from: { id: 42 }, successful_payment: { invoice_payload: order.id, currency: 'XTR', total_amount: 50, telegram_payment_charge_id: 'w-1' } } };
+  assert.equal((await t.handle(hook(update, null))).status, 401);
+  assert.equal((await t.handle(hook(update, webhookSecret('another-token')))).status, 401);
+  assert.equal(t.store.entitlement(42).active, false);
+  assert.equal((await t.handle(hook(update))).status, 200);
+  assert.equal((await t.handle(hook(update))).status, 200);
+  assert.equal(t.store.db.prepare('SELECT count(*) AS n FROM payments').get().n, 1);
+  assert.equal(t.store.entitlement(42).active, true);
+  assert.equal((await t.handle(new Request(APP + WEBHOOK_PATH))).status, 405);
+  assert.equal(webhookSecret(TOKEN).length, 64); assert.match(webhookSecret(TOKEN), /^[0-9a-f]+$/);
+});
+test('Worker: /health sets the webhook once and never replaces someone else\'s', async () => {
+  const t = workerHarness();
+  const health = await (await t.handle(new Request(APP + '/health'))).json();
+  assert.deepEqual(health, { ok: true, app: 'vibentry', bot: 'ok' });
+  const set = t.calls.find(c => c.method === 'setWebhook');
+  assert.equal(set.payload.url, APP + WEBHOOK_PATH); assert.equal(set.payload.secret_token, webhookSecret(TOKEN));
+  assert.ok(t.calls.some(c => c.method === 'setChatMenuButton' && c.payload.menu_button.web_app.url === APP));
+  await t.handle(new Request(APP + '/health'));
+  assert.equal(t.calls.filter(c => c.method === 'getWebhookInfo').length, 1);
+  const other = workerHarness({ webhookUrl: 'https://elsewhere.example/hook' });
+  assert.equal((await (await other.handle(new Request(APP + '/health'))).json()).bot, 'webhook-conflict');
+  assert.equal(other.calls.some(c => c.method === 'setWebhook'), false);
+});
+test('Worker: api.mjs answers through the Web Request shim (GET header auth, POST body, errors)', async () => {
+  const t = workerHarness();
+  assert.equal((await t.handle(new Request(APP + '/api/config'))).status, 200);
+  assert.equal((await t.handle(new Request(APP + '/api/lessons/1'))).status, 401);
+  const lesson = await t.handle(new Request(APP + '/api/lessons/1', { headers: { 'X-Telegram-Init-Data': signed() } }));
+  assert.equal(lesson.status, 200); assert.equal((await lesson.json()).id, 1);
+  assert.equal((await t.handle(new Request(APP + '/api/lessons/2', { headers: { 'X-Telegram-Init-Data': signed() } }))).status, 403);
+  const session = await t.handle(new Request(APP + '/api/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ initData: signed() }) }));
+  assert.equal(session.status, 200); assert.equal((await session.json()).user.id, 42);
+  assert.equal((await t.handle(new Request(APP + '/api/session', { method: 'POST', body: '{bad' }))).status, 400);
+  assert.equal((await t.handle(new Request(APP + '/api/session', { method: 'POST', body: 'x'.repeat(30000) }))).status, 413);
+  assert.equal((await t.handle(new Request(APP + '/api/nope'))).status, 404);
+});
+test('Worker routing: only public files, private paths and dot-files are refused, security headers on every response', () => {
+  for (const ok of ['/', '/index.html', '/style.css', '/js/app.js', '/assets/brand.png']) assert.equal(isPublicAsset(ok), true, ok);
+  for (const bad of ['/.env', '/data/lessons.json.bak', '/server/api.mjs', '/%2e%2e/x.json'.replace('.json', ''), '/js/.hidden.js', '/%E0%A4%A', '/data']) assert.equal(isPublicAsset(bad), false, bad);
+  assert.equal(isAppRoute('/api/config'), true); assert.equal(isAppRoute('/telegram/webhook'), true); assert.equal(isAppRoute('/style.css'), false);
+  const page = withSecurityHeaders(new Response('x', { headers: { 'Content-Type': 'text/html' } }), '/');
+  assert.match(page.headers.get('content-security-policy'), /frame-ancestors/); assert.equal(page.headers.get('cache-control'), 'no-cache');
+  assert.equal(withSecurityHeaders(new Response('x'), '/style.css').headers.get('cache-control'), 'public, max-age=300');
+});
