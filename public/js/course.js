@@ -1,3 +1,5 @@
+// Lessons 01–05 open after the channel subscription. The server (FREE_LESSONS in server/telegram.mjs) enforces it.
+export const FREE_LESSONS = 5;
 export const modules = [
   { id: 1, range: '01–05', title: 'Первый сайт', description: 'От пустой папки до живой ссылки', start: 1, end: 5 },
   { id: 2, range: '06–13', title: 'Дизайн и запуск', description: 'Бриф, адаптивность, формы и публикация', start: 6, end: 13 },
@@ -30,7 +32,7 @@ const titles = [
   'Поддержка и повторные обращения',
   'Полный путь и план следующего проекта',
 ];
-export const lessons = titles.map((title, i) => ({ id: i + 1, title, free: i < 1, module: modules.find(m => i + 1 >= m.start && i + 1 <= m.end).id }));
+export const lessons = titles.map((title, i) => ({ id: i + 1, title, free: i < FREE_LESSONS, module: modules.find(m => i + 1 >= m.start && i + 1 <= m.end).id }));
 export const materials = [
   { id: 'first-prompt', title: 'Задача для первой страницы', description: 'Основа запроса к агенту · урок 03', lesson: 3 },
   { id: 'mobile-prompt', title: 'Исправление мобильной версии', description: 'Точная правка по скриншоту · урок 05', lesson: 5 },

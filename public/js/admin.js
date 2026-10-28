@@ -42,7 +42,7 @@ export function createAdmin({ sendApi, getApi, toast, modal, closeModal, config,
     const card = (label, value, hint = '') => `<div class="stat-card"><small>${label}</small><strong>${value}</strong>${hint ? `<span>${hint}</span>` : ''}</div>`;
     return `<div class="stat-grid">${card('Участников', s.users, `+${s.new7} за 7 дней`)}${card('Pro', s.pro, `конверсия ${s.conversion}%`)}${card('Free', s.free)}${card('Выручка', revenueText(s), s.refunds ? `возвратов: ${s.refunds}` : 'без возвратов')}</div>
     <section class="admin-card"><h2>Последние 14 дней</h2>${chart(s)}</section>
-    <section class="admin-card"><h2>Сейчас в продаже</h2><p class="admin-line">${state.overview.current.priceStars ? `<strong>${state.overview.current.priceStars} ★</strong>${state.overview.current.discountPercent ? ` · скидка −${state.overview.current.discountPercent}% (обычная цена ${state.overview.current.regularPriceStars} ★)` : ' · без скидки'}` : 'Цена не задана — оплата выключена.'}</p><p class="admin-line">Для бесплатного урока: ${state.overview.effectiveChannels.length ? state.overview.effectiveChannels.map(c => `<b>${e(c.title)}</b>`).join(', ') : '<b class="warn">каналы не заданы — приложение никого не пустит</b>'}</p></section>`;
+    <section class="admin-card"><h2>Сейчас в продаже</h2><p class="admin-line">${state.overview.current.priceStars ? `<strong>${state.overview.current.priceStars} ★</strong>${state.overview.current.discountPercent ? ` · скидка −${state.overview.current.discountPercent}% (обычная цена ${state.overview.current.regularPriceStars} ★)` : ' · без скидки'}` : 'Цена не задана — оплата выключена.'}</p><p class="admin-line">Для бесплатных уроков: ${state.overview.effectiveChannels.length ? state.overview.effectiveChannels.map(c => `<b>${e(c.title)}</b>`).join(', ') : '<b class="warn">каналы не заданы — приложение никого не пустит</b>'}</p></section>`;
   }
 
   function usersTab() {
@@ -67,7 +67,7 @@ export function createAdmin({ sendApi, getApi, toast, modal, closeModal, config,
   }
   function accessTab() {
     const list = state.overview.channels; const fallback = !list.length && state.overview.effectiveChannels.length;
-    return `<section class="admin-card"><h2>Подписка для бесплатного урока</h2><p class="admin-line">Чтобы открыть первый урок, человек должен состоять во <b>всех</b> перечисленных каналах и чатах. Бот должен быть администратором в каждом — иначе Telegram не покажет, подписан ли человек. До 5 штук.</p>${fallback ? '<p class="admin-line warn">Сейчас используется канал из файла .env. Добавьте список ниже — он заменит его.</p>' : ''}<div id="channel-list">${list.map(channelRow).join('') || '<p class="admin-empty" id="channel-empty">Список пуст.</p>'}</div><div class="admin-actions"><button type="button" class="button button-secondary" data-adm="channel-add" ${list.length >= 5 ? 'disabled' : ''}>Добавить канал или чат</button><button type="button" class="button button-primary" data-adm="save-channels">Сохранить список${icon('check')}</button></div><p class="form-hint">Для публичного канала достаточно ссылки вида https://t.me/имя — ID определится сам. Для закрытого чата укажите ссылку-приглашение (https://t.me/+…) и числовой ID вида -100…. Узнать ID можно у любого бота-«ID-информера».</p></section>`;
+    return `<section class="admin-card"><h2>Подписка для бесплатных уроков</h2><p class="admin-line">Чтобы открыть бесплатные уроки 01–05, человек должен состоять во <b>всех</b> перечисленных каналах и чатах. Бот должен быть администратором в каждом — иначе Telegram не покажет, подписан ли человек. До 5 штук.</p>${fallback ? '<p class="admin-line warn">Сейчас используется канал из файла .env. Добавьте список ниже — он заменит его.</p>' : ''}<div id="channel-list">${list.map(channelRow).join('') || '<p class="admin-empty" id="channel-empty">Список пуст.</p>'}</div><div class="admin-actions"><button type="button" class="button button-secondary" data-adm="channel-add" ${list.length >= 5 ? 'disabled' : ''}>Добавить канал или чат</button><button type="button" class="button button-primary" data-adm="save-channels">Сохранить список${icon('check')}</button></div><p class="form-hint">Для публичного канала достаточно ссылки вида https://t.me/имя — ID определится сам. Для закрытого чата укажите ссылку-приглашение (https://t.me/+…) и числовой ID вида -100…. Узнать ID можно у любого бота-«ID-информера».</p></section>`;
   }
 
   function logTab() {
@@ -90,7 +90,7 @@ export function createAdmin({ sendApi, getApi, toast, modal, closeModal, config,
 
   function screen() {
     setTimeout(() => load(state.tab), 0);
-    return '<section class="admin-panel"><span class="eyebrow">УПРАВЛЕНИЕ VIBENTRY</span><h1>Админ-панель</h1><p class="admin-sub">Участники, цены, промокоды и доступ к бесплатному уроку.</p><div id="admin-root"></div></section>';
+    return '<section class="admin-panel"><span class="eyebrow">УПРАВЛЕНИЕ VIBENTRY</span><h1>Админ-панель</h1><p class="admin-sub">Участники, цены, промокоды и доступ к бесплатным урокам.</p><div id="admin-root"></div></section>';
   }
 
   async function openUser(id) {

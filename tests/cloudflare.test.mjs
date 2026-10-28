@@ -94,7 +94,8 @@ test('Worker: api.mjs answers through the Web Request shim (GET header auth, POS
   assert.equal((await t.handle(new Request(APP + '/api/lessons/1'))).status, 401);
   const lesson = await t.handle(new Request(APP + '/api/lessons/1', { headers: { 'X-Telegram-Init-Data': signed() } }));
   assert.equal(lesson.status, 200); assert.equal((await lesson.json()).id, 1);
-  assert.equal((await t.handle(new Request(APP + '/api/lessons/2', { headers: { 'X-Telegram-Init-Data': signed() } }))).status, 403);
+  assert.equal((await t.handle(new Request(APP + '/api/lessons/5', { headers: { 'X-Telegram-Init-Data': signed() } }))).status, 200);
+  assert.equal((await t.handle(new Request(APP + '/api/lessons/6', { headers: { 'X-Telegram-Init-Data': signed() } }))).status, 403);
   const session = await t.handle(new Request(APP + '/api/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ initData: signed() }) }));
   assert.equal(session.status, 200); assert.equal((await session.json()).user.id, 42);
   assert.equal((await t.handle(new Request(APP + '/api/session', { method: 'POST', body: '{bad' }))).status, 400);

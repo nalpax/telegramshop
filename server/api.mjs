@@ -1,5 +1,5 @@
 import { validateInitData } from './auth.mjs';
-import { accessMode, applyPromo, channelsFor, isAdmin, normalizeChannel, offerFor, pricesFor } from './telegram.mjs';
+import { FREE_LESSONS, accessMode, applyPromo, channelsFor, isAdmin, normalizeChannel, offerFor, pricesFor } from './telegram.mjs';
 import { makeProviders } from './providers/index.mjs';
 import { fingerprint } from './fingerprint.mjs';
 // Course content is passed in by the host: server/content-node.mjs reads data/ for Node, the Cloudflare build bundles it.
@@ -79,7 +79,7 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
       try { if (event.externalId) await settle(provider, event.externalId, event); } catch { return send(500, { error: 'Try again later' }); }
       return send(200, { ok: true });
     }
-    if (url.pathname === '/api/config' && request.method === 'GET') { const offer = offerFor(store); return send(200, { supportUsername: userName(process.env.SUPPORT_USERNAME), requiredChannelUrl: channelsFor(store)[0]?.url || null, requiredChannels: channelsFor(store).map(({ title, url }) => ({ title, url })), ...offer, accessMode: accessMode(), methods: methodsFor(), prices: pricesFor(store), paymentsEnabled: !!(contentReady && channelsFor(store).length > 0 && methodsFor().length > 0), preview, freeLessons: 1, library: { prompts: promptIndex.size, articles: articleIndex.size } }); }
+    if (url.pathname === '/api/config' && request.method === 'GET') { const offer = offerFor(store); return send(200, { supportUsername: userName(process.env.SUPPORT_USERNAME), requiredChannelUrl: channelsFor(store)[0]?.url || null, requiredChannels: channelsFor(store).map(({ title, url }) => ({ title, url })), ...offer, accessMode: accessMode(), methods: methodsFor(), prices: pricesFor(store), paymentsEnabled: !!(contentReady && channelsFor(store).length > 0 && methodsFor().length > 0), preview, freeLessons: FREE_LESSONS, library: { prompts: promptIndex.size, articles: articleIndex.size } }); }
     const adminRoute = url.pathname.startsWith('/api/admin/');
     const lessonMatch = url.pathname.match(/^\/api\/lessons\/(\d+)$/);
     const resourceMatch = url.pathname.match(/^\/api\/resources\/([a-z-]+)$/);
@@ -93,7 +93,7 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
     const data = acceptedPost ? await body(request) : {};
     const user = validateInitData(acceptedPost ? data.initData : request.headers['x-telegram-init-data'], process.env.BOT_TOKEN);
     const id = lessonMatch ? Number(lessonMatch[1]) : null;
-    if (preview && id === 1) return send(200, lessons[0]);
+    if (preview && id >= 1 && id <= FREE_LESSONS && lessons[id - 1]) return send(200, lessons[id - 1]);
     // Design preview only (no BOT_TOKEN, not production): catalogue titles and the free article are readable.
     if (preview && request.method === 'GET') {
       if (url.pathname === '/api/prompts') return send(200, promptList());
@@ -217,7 +217,7 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
     }
     if (lessonMatch) {
       if (!lessons[id - 1]) return send(404, { error: 'Lesson not found' });
-      if (id > 1 && !access.active) return send(403, { error: 'Purchase required', reason: 'payment' });
+      if (id > FREE_LESSONS && !access.active) return send(403, { error: 'Purchase required', reason: 'payment' });
       if (overLimit(user.id, 'content')) return send(429, { error: 'Слишком много запросов подряд. Подождите несколько минут.' });
       const lesson = lessons[id - 1];
       return send(200, lesson.markdown ? { ...lesson, markdown: fingerprint(lesson.markdown, user.id), ...(lesson.task ? { task: fingerprint(lesson.task, user.id) } : {}) } : lesson);
@@ -226,7 +226,7 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
       if (data.reset === true) store.reset(user.id);
       else {
         if (!Number.isInteger(data.lessonId) || data.lessonId < 1 || data.lessonId > 24) return send(400, { error: 'Invalid lesson' });
-        if (data.lessonId > 1 && !access.active) return send(403, { error: 'Purchase required' });
+        if (data.lessonId > FREE_LESSONS && !access.active) return send(403, { error: 'Purchase required' });
         store.complete(user.id, data.lessonId);
       }
       return send(200, { done: store.getProgress(user.id) });

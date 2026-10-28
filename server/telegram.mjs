@@ -47,6 +47,9 @@ export function configuredPrice() {
   const value = process.env.PRICE_STARS || '';
   return /^[1-9]\d{0,5}$/.test(value) ? Number(value) : null;
 }
+// Lessons 01–05 (module «Первый сайт») open after the channel subscription; the rest, prompts and the base need the purchase.
+// public/js/course.js marks the same lessons as free (a test keeps them in sync); the server is what enforces it.
+export const FREE_LESSONS = 5;
 export function accessMode() { return 'one_time'; }
 export function isAdmin(id) { return (process.env.ADMIN_IDS || '').split(',').map(s => s.trim()).filter(Boolean).includes(String(id)); }
 export function offerFor(store, now = Date.now()) {

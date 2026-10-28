@@ -1,5 +1,5 @@
 import { icon, art } from './icons.js';
-import { modules, lessons, materials } from './course.js';
+import { FREE_LESSONS, modules, lessons, materials } from './course.js';
 import { renderMarkdown } from './markdown.js';
 import { createAdmin, planBadge } from './admin.js';
 import { installProtection } from './protect.js';
@@ -58,15 +58,15 @@ function hero() {
 function tile(title, subtitle, kind, hash, action = '') { return `<a class="quick-tile tile-${kind}" href="${hash}" ${action ? `data-action="${action}"` : ''}><div><h3>${title}</h3><p>${subtitle}</p></div>${art(kind)}<span class="tile-arrow">${icon('arrow')}</span></a>`; }
 function home() {
   const next = lessons[progress.last - 1];
-  const freeDone = progress.done.includes(1) && !session?.access?.active;
-  const eyebrow = freeDone ? 'ПЕРВЫЙ УРОК ПРОЙДЕН' : progress.done.length ? 'ВАШ СЛЕДУЮЩИЙ ШАГ' : 'НАЧНИТЕ С МАЛЕНЬКОГО';
+  const freeDone = lessons.filter(l => l.free).every(l => progress.done.includes(l.id)) && !session?.access?.active;
+  const eyebrow = freeDone ? 'БЕСПЛАТНЫЕ УРОКИ ПРОЙДЕНЫ' : progress.done.length ? 'ВАШ СЛЕДУЮЩИЙ ШАГ' : 'НАЧНИТЕ С МАЛЕНЬКОГО';
   const title = freeDone ? 'Продолжим создавать?' : `${String(next.id).padStart(2, '0')} · ${e(next.title)}`;
   const label = freeDone ? 'Посмотреть полную программу' : progress.done.length ? 'Продолжить урок' : 'Начать бесплатно';
   const percent = Math.round(progress.done.length / 24 * 100);
   return `<header class="home-header">${brand()}</header>
   ${hero()}
   <section class="continue-card" aria-labelledby="continue-title"><div class="continue-top"><span class="eyebrow">${eyebrow}</span>${icon(freeDone ? 'check' : 'sparkle')}</div><h2 id="continue-title">${title}</h2><div class="progress-caption"><span>Пройдено ${progress.done.length} из 24 уроков</span><span>${percent}%</span></div><progress max="24" value="${progress.done.length}" aria-label="Прогресс курса"></progress><button class="button button-primary" data-action="${freeDone ? 'access' : 'lesson'}" ${freeDone ? '' : `data-id="${next.id}"`}>${label}${icon('arrow')}</button></section>
-  <section class="quick-section" aria-labelledby="quick-title"><div class="section-heading"><h2 id="quick-title">Быстрый доступ</h2></div><div class="quick-grid">${tile('Уроки', '24 урока,<br>первый бесплатно', 'book', urlFor())}${tile('Промпты', '300 запросов<br>для ИИ', 'prompts', urlFor('prompts'))}${tile('База', 'Инструменты, ниши,<br>клиенты, заказы', 'files', urlFor('base'))}${tile(session?.access?.active ? 'Мой доступ' : 'Полный доступ', session?.access?.active ? 'Всё открыто,<br>навсегда' : 'Один платёж,<br>навсегда', 'plane', '#access', 'access')}</div></section>
+  <section class="quick-section" aria-labelledby="quick-title"><div class="section-heading"><h2 id="quick-title">Быстрый доступ</h2></div><div class="quick-grid">${tile('Уроки', `24 урока,<br>${FREE_LESSONS} бесплатно`, 'book', urlFor())}${tile('Промпты', '300 запросов<br>для ИИ', 'prompts', urlFor('prompts'))}${tile('База', 'Инструменты, ниши,<br>клиенты, заказы', 'files', urlFor('base'))}${tile(session?.access?.active ? 'Мой доступ' : 'Полный доступ', session?.access?.active ? 'Всё открыто,<br>навсегда' : 'Один платёж,<br>навсегда', 'plane', '#access', 'access')}</div></section>
   <p class="home-note">Одна сделанная страница полезнее десяти прочитанных.</p>${nav('home')}`;
 }
 function lessonRow(lesson) {
@@ -115,7 +115,7 @@ function catalogueBody(tab) {
   return modules.map(m => {
     const rows = lessons.filter(l => l.module === m.id && matches(query, l.title, l.id));
     if (!rows.length) return '';
-    const meta = m.id === 1 ? '<span class="free-label">Первый урок бесплатно</span>' : `${rows.length} ${plural(rows.length, 'урок', 'урока', 'уроков')}`;
+    const meta = m.end <= FREE_LESSONS ? '<span class="free-label">Бесплатно после подписки</span>' : `${rows.length} ${plural(rows.length, 'урок', 'урока', 'уроков')}`;
     return `<section class="module-section">${heading(m.range, m.title, meta)}<div class="lesson-list">${rows.map(lessonRow).join('')}</div></section>`;
   }).join('') || emptySearch();
 }
@@ -184,7 +184,7 @@ function profile() {
   const initials = session?.user?.first_name ? e(session.user.first_name[0]) : 've.';
   const active = session?.access?.active;
   const percent = Math.round(progress.done.length / 24 * 100);
-  return `<header class="page-header">${brand(true)}<div><h1>Ваш прогресс</h1><p>Маленькие шаги. Настоящие проекты.</p></div></header><section class="profile-card"><div class="profile-avatar">${initials}</div><h2>${e(name)}</h2>${planBadge(active ? 'pro' : 'free')}<span class="profile-label ${active ? 'is-full' : ''}">${active ? 'Полный доступ · навсегда' : 'Бесплатный доступ · урок 01'}</span><div class="profile-stats"><div><strong>${progress.done.length}<span>/24</span></strong><small>уроков пройдено</small></div><div><strong>${percent}<span>%</span></strong><small>вашего маршрута</small></div></div><progress max="24" value="${progress.done.length}" aria-label="Пройдено уроков"></progress><p class="storage-note">${config.preview ? 'Демо: прогресс сохраняется только на этом устройстве.' : 'Прогресс привязан к вашему аккаунту Telegram.'}</p></section>${active ? '' : `<button class="access-banner" data-action="access"><span class="access-icon">${icon('sparkle')}</span><span><strong>Откройте весь Vibentry</strong><small>23 урока, 300 промптов и база материалов</small></span>${icon('arrow')}</button>`}<section class="profile-links"><button data-action="support">${icon('chat')}Помощь и вопросы автору${icon('chevron')}</button><button data-action="community">${icon('lock')}Доступ и оплата${icon('chevron')}</button><button data-action="about">${icon('book')}О курсе${icon('chevron')}</button><button data-action="reset">${icon('back')}Начать заново${icon('chevron')}</button></section>${sessionError ? '<p class="storage-note">Не удалось подтвердить вход через Telegram. Откройте приложение заново из бота.</p>' : ''}<div class="profile-signature">${brand(true)}<span>Сначала одна маленькая страница.<br>Остальное потом.</span></div>${session?.isAdmin ? '<a class="button button-secondary admin-entry" href="#admin">Админ-панель: участники, акции, каналы</a>' : ''}${nav('profile')}`;
+  return `<header class="page-header">${brand(true)}<div><h1>Ваш прогресс</h1><p>Маленькие шаги. Настоящие проекты.</p></div></header><section class="profile-card"><div class="profile-avatar">${initials}</div><h2>${e(name)}</h2>${planBadge(active ? 'pro' : 'free')}<span class="profile-label ${active ? 'is-full' : ''}">${active ? 'Полный доступ · навсегда' : `Бесплатный доступ · уроки 01–${String(FREE_LESSONS).padStart(2, '0')}`}</span><div class="profile-stats"><div><strong>${progress.done.length}<span>/24</span></strong><small>уроков пройдено</small></div><div><strong>${percent}<span>%</span></strong><small>вашего маршрута</small></div></div><progress max="24" value="${progress.done.length}" aria-label="Пройдено уроков"></progress><p class="storage-note">${config.preview ? 'Демо: прогресс сохраняется только на этом устройстве.' : 'Прогресс привязан к вашему аккаунту Telegram.'}</p></section>${active ? '' : `<button class="access-banner" data-action="access"><span class="access-icon">${icon('sparkle')}</span><span><strong>Откройте весь Vibentry</strong><small>Ещё ${24 - FREE_LESSONS} ${plural(24 - FREE_LESSONS, 'урок', 'урока', 'уроков')}, 300 промптов и база материалов</small></span>${icon('arrow')}</button>`}<section class="profile-links"><button data-action="support">${icon('chat')}Помощь и вопросы автору${icon('chevron')}</button><button data-action="community">${icon('lock')}Доступ и оплата${icon('chevron')}</button><button data-action="about">${icon('book')}О курсе${icon('chevron')}</button><button data-action="reset">${icon('back')}Начать заново${icon('chevron')}</button></section>${sessionError ? '<p class="storage-note">Не удалось подтвердить вход через Telegram. Откройте приложение заново из бота.</p>' : ''}<div class="profile-signature">${brand(true)}<span>Сначала одна маленькая страница.<br>Остальное потом.</span></div>${session?.isAdmin ? '<a class="button button-secondary admin-entry" href="#admin">Админ-панель: участники, акции, каналы</a>' : ''}${nav('profile')}`;
 }
 function render() {
   const epoch = ++renderEpoch;
@@ -310,7 +310,7 @@ document.addEventListener('click', event => {
   if (action === 'copy-code') { const code = readerCodes[Number(target.dataset.index)]; if (code) copy(code); }
   if (action === 'copy-section') { const section = freeCache.get(readerId)?.sections[Number(target.dataset.index)]; if (section?.code) copy(section.code); }
   if (action === 'finish' && readerId && checked) { finishLesson(); return; }
-  if (action === 'about') modal('Сначала одна маленькая страница.', '<p>Vibentry — практический учебник по вайбкодингу от @nalpax. 24 урока: от первого запроса до сайта, который можно показать людям, плюс 300 промптов и база материалов.</p><p>Первый урок открывается после подписки на канал. Дальше — настоящие сайты, портфолио, клиенты, цена и сдача проектов.</p><p class="modal-note">Курс не гарантирует заказы и доход: они зависят от вашей практики и спроса.</p>');
+  if (action === 'about') modal('Сначала одна маленькая страница.', '<p>Vibentry — практический учебник по вайбкодингу от @nalpax. 24 урока: от первого запроса до сайта, который можно показать людям, плюс 300 промптов и база материалов.</p><p>Первые 5 уроков открываются после подписки на канал. Дальше — настоящие сайты, портфолио, клиенты, цена и сдача проектов.</p><p class="modal-note">Курс не гарантирует заказы и доход: они зависят от вашей практики и спроса.</p>');
   if (action === 'reset') modal('Начать с чистого листа?', '<p>Отметки о пройденных уроках будут удалены.</p><button class="button button-primary" data-action="confirm-reset">Сбросить прогресс</button><button class="button button-secondary" data-action="close">Сохранить прогресс</button>');
   if (action === 'confirm-reset') resetAllProgress(target);
 });
@@ -324,7 +324,7 @@ document.addEventListener('keydown', event => {
 window.addEventListener('hashchange', render);
 render();
 function gateScreen() {
-  return `<header class="home-header">${brand()}</header><main class="welcome-screen"><div class="welcome-art"><img src="/assets/hero.png" alt="" width="230" height="230"></div><span class="eyebrow">ВАШ ПЕРВЫЙ ШАГ</span><h1>Большие проекты<br>начинаются с малого<span>.</span></h1><p>Подпишитесь на канал Vibentry, чтобы открыть приложение и забрать первый урок бесплатно.</p><div class="welcome-steps"><div><span>01</span><p>Подпишитесь на канал</p>${icon('send')}</div><div><span>02</span><p>Вернитесь и проверьте подписку</p>${icon('check')}</div><div><span>03</span><p>Откройте бесплатный урок</p>${icon('book')}</div></div>${config.requiredChannelUrl ? `<a class="button button-primary" href="${e(config.requiredChannelUrl)}" target="_blank" rel="noopener noreferrer">Подписаться на канал${icon('arrow')}</a>` : '<button class="button button-primary" disabled>Канал скоро появится</button>'}<button class="button button-secondary" data-action="check-subscription">Проверить подписку${icon('check')}</button><p class="welcome-note">Первый урок — бесплатно.<br>Полный курс оплачивается внутри приложения.</p>${config.preview ? '<button class="preview-link" data-action="preview">Посмотреть дизайн в демо-режиме →</button>' : ''}</main>`;
+  return `<header class="home-header">${brand()}</header><main class="welcome-screen"><div class="welcome-art"><img src="/assets/hero.png" alt="" width="230" height="230"></div><span class="eyebrow">ВАШ ПЕРВЫЙ ШАГ</span><h1>Большие проекты<br>начинаются с малого<span>.</span></h1><p>Подпишитесь на канал Vibentry, чтобы открыть приложение и забрать первые ${FREE_LESSONS} уроков бесплатно.</p><div class="welcome-steps"><div><span>01</span><p>Подпишитесь на канал</p>${icon('send')}</div><div><span>02</span><p>Вернитесь и проверьте подписку</p>${icon('check')}</div><div><span>03</span><p>Откройте бесплатные уроки</p>${icon('book')}</div></div>${config.requiredChannelUrl ? `<a class="button button-primary" href="${e(config.requiredChannelUrl)}" target="_blank" rel="noopener noreferrer">Подписаться на канал${icon('arrow')}</a>` : '<button class="button button-primary" disabled>Канал скоро появится</button>'}<button class="button button-secondary" data-action="check-subscription">Проверить подписку${icon('check')}</button><p class="welcome-note">Первые ${FREE_LESSONS} уроков — бесплатно.<br>Полный курс оплачивается внутри приложения.</p>${config.preview ? '<button class="preview-link" data-action="preview">Посмотреть дизайн в демо-режиме →</button>' : ''}</main>`;
 }
 function authScreen() {
   return `<header class="home-header">${brand()}</header><main class="welcome-screen"><div class="welcome-art"><img src="/assets/hero.png" alt="" width="230" height="230"></div><h1>Откройте Vibentry<br>в Telegram</h1><p>Для проверки подписки, оплаты и сохранения прогресса нужен вход через бота.</p><button class="button button-primary" data-action="reauth">Проверить вход ещё раз${icon('arrow')}</button><button class="button button-secondary" data-action="support">Связаться с автором</button></main>`;
@@ -357,7 +357,7 @@ async function initialize() {
 async function checkSubscription(button) {
   if (config.preview) return toast('В демо подписка не проверяется. Нажмите «Посмотреть дизайн».');
   button.disabled = true; button.textContent = 'Проверяем…';
-  try { await refreshSession(); if (session.subscribed) { render(); toast('Подписка подтверждена. Первый урок открыт!'); } else toast('Подписка пока не найдена. Подпишитесь и проверьте ещё раз.'); }
+  try { await refreshSession(); if (session.subscribed) { render(); toast(`Подписка подтверждена. Первые ${FREE_LESSONS} уроков открыты!`); } else toast('Подписка пока не найдена. Подпишитесь и проверьте ещё раз.'); }
   catch { toast('Не удалось проверить подписку. Попробуйте чуть позже.'); }
   finally { if (button.isConnected) { button.disabled = false; button.innerHTML = `Проверить подписку${icon('check')}`; } }
 }
@@ -366,8 +366,8 @@ async function finishLesson() {
   try {
     if (!config.preview) await sendApi('/api/progress', { lessonId: id }); complete(id);
     try { tg?.HapticFeedback.notificationOccurred('success'); } catch {}
-    if (id < 24 && session?.access?.active) { go('#lesson?id=' + (id + 1)); toast('Ещё один шаг. Отличная работа!'); }
-    else { go('#home'); toast(id === 1 ? 'Первый урок пройден. Дальше — больше!' : 'Отличная работа!'); }
+    if (id < 24 && (session?.access?.active || lessons[id]?.free)) { go('#lesson?id=' + (id + 1)); toast('Ещё один шаг. Отличная работа!'); }
+    else { go('#home'); toast(id === FREE_LESSONS && !session?.access?.active ? 'Бесплатные уроки пройдены. Дальше — больше!' : 'Отличная работа!'); }
   } catch { toast('Не удалось сохранить прогресс. Проверьте соединение.'); if (button.isConnected) button.disabled = false; }
 }
 async function applyPromoCode(button) {

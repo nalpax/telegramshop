@@ -106,9 +106,9 @@ test('Course text carries an invisible per-reader fingerprint, code stays clean,
   try {
     t.store.grantAccess(7); await t.post('/api/admin/channels', { channels: [{ url: 'https://t.me/vibentry' }] });
     await t.post('/api/session', {}, 7);
-    const codes = []; for (let i = 0; i < 43; i++) codes.push((await t.get('/api/lessons/2', 7)).status);
+    const codes = []; for (let i = 0; i < 43; i++) codes.push((await t.get('/api/lessons/6', 7)).status);
     assert.equal(codes.slice(0, 40).every(c => c === 200), true); assert.equal(codes[41], 429);
-    assert.equal((await t.get('/api/lessons/2', 8)).status, 403, 'other readers are unaffected');
+    assert.equal((await t.get('/api/lessons/6', 8)).status, 403, 'other readers are unaffected');
     assert.ok((await (await t.get('/api/admin/audit')).json()).items.some(a => a.action === 'rate-limit'));
   } finally { await t.done(); }
 });

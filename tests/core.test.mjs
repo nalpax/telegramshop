@@ -53,7 +53,7 @@ test('Bot launch button and HTTPS validation', () => {
   assert.equal(validateAppUrl('https://localhost'), false);
   const message = messageFor('/start', 'https://example.com');
   assert.equal(message.reply_markup.inline_keyboard[0][0].web_app.url, 'https://example.com');
-  assert.match(message.text, /первый урок бесплатно/);
+  assert.match(message.text, /первые 5 уроков бесплатно/);
 });
 test('Offers apply and expire deterministically, leaving existing purchases unchanged', () => {
   const store = new Store(':memory:');
@@ -78,8 +78,12 @@ test('API enforces channel membership, paid content and server-side price; priva
     assert.equal((await get('/api/lessons/1')).status, 403);
     member = true;
     assert.equal((await get('/api/lessons/1')).status, 200);
-    assert.equal((await get('/api/lessons/2')).status, 403);
+    // Lessons 01–05 are free after subscription; 06+ and the templates need the purchase.
+    for (const free of [2, 3, 4, 5]) assert.equal((await get('/api/lessons/' + free)).status, 200, 'lesson ' + free);
+    assert.equal((await get('/api/lessons/6')).status, 403);
+    assert.equal((await get('/api/lessons/24')).status, 403);
     assert.equal((await get('/api/resources/first-prompt')).status, 403);
+    assert.equal((await (await fetch(base + '/api/config')).json()).freeLessons, 5);
     // Library: titles are listed after subscription; texts only after purchase.
     const promptList = await (await get('/api/prompts')).json();
     assert.equal(promptList.items.length, 1); assert.equal(JSON.stringify(promptList).includes('SYNTHETIC-PROMPT-TEXT'), false);
@@ -89,7 +93,8 @@ test('API enforces channel membership, paid content and server-side price; priva
     assert.equal((await get('/api/articles/open-note')).status, 200);
     assert.equal((await get('/api/articles/paid-note')).status, 403);
     assert.equal((await get('/api/prompts/999')).status, 404);
-    assert.equal((await post('/api/progress', { lessonId: 2 })).status, 403);
+    assert.equal((await post('/api/progress', { lessonId: 5 })).status, 200);
+    assert.equal((await post('/api/progress', { lessonId: 6 })).status, 403);
     assert.equal((await fetch(base + '/data/lessons.json')).status, 404);
     assert.equal((await fetch(base + '/handoff/course/Vibentry_Course_v02.pdf')).status, 404);
     assert.equal((await fetch(base + '/.env')).status, 404);
@@ -142,4 +147,10 @@ test('Membership checks are cached briefly, failures are reported without granti
     process.env.MEMBERSHIP_CACHE_SECONDS = '0';
     assert.equal((await get('/api/lessons/1')).status, 503);
   } finally { await new Promise(resolve => server.close(resolve)); store.close(); for (const key of Object.keys(process.env)) if (!(key in old)) delete process.env[key]; Object.assign(process.env, old); }
+});
+test('The app and the server agree on the free lessons (01–05)', async () => {
+  const { FREE_LESSONS } = await import('../server/telegram.mjs');
+  const course = await import('../public/js/course.js');
+  assert.equal(FREE_LESSONS, 5);
+  assert.deepEqual(course.lessons.filter(l => l.free).map(l => l.id), [1, 2, 3, 4, 5]);
 });
