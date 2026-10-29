@@ -27,19 +27,31 @@ export function makeWorkerApp({ store, telegram, content, env = process.env, log
   const api = makeApi(store, telegram, content);
   const appUrl = String(env.APP_URL || '').replace(/\/$/, '');
   const telegramApi = (method, payload) => telegram.api(method, payload);
-  let bot = null;
+  let bot = null; let botError = null;
   // Points the bot at this deployment once per object start. Someone else's webhook is never overwritten.
   function ensureBot() {
     if (!env.BOT_TOKEN) return Promise.resolve('no-token');
     if (!validateAppUrl(appUrl)) return Promise.resolve('no-app-url');
+    // A BotFather token looks like 123456789:AA… — spaces, quotes or a "bot" prefix make every Telegram call fail.
+    if (!/^\d{5,}:[A-Za-z0-9_-]{30,}$/.test(env.BOT_TOKEN)) return Promise.resolve('token-format');
+    let step = 'getWebhookInfo';
     bot ??= (async () => {
       const target = appUrl + WEBHOOK_PATH;
       const info = await telegramApi('getWebhookInfo');
       if (info.url && info.url !== target) return 'webhook-conflict';
+      step = 'setWebhook';
       if (info.url !== target) await telegramApi('setWebhook', { url: target, secret_token: webhookSecret(env.BOT_TOKEN), allowed_updates: ['message', 'pre_checkout_query'] });
+      step = 'configureBot';
       await configureBot(telegramApi, appUrl);
+      botError = null;
       return 'ok';
-    })().catch(error => { bot = null; log(`Bot setup failed (code ${Number(error.code) || 'network'}). Credentials are not logged.`); return 'telegram-error'; });
+    })().catch(error => {
+      bot = null;
+      // Telegram's error code and text (e.g. 401 Unauthorized) are safe to show; the token never is.
+      botError = { step, code: Number(error.code) || 'network', ...(error.description ? { description: error.description } : {}) };
+      log(`Bot setup failed at ${step} (code ${botError.code}). Credentials are not logged.`);
+      return 'telegram-error';
+    });
     return bot;
   }
   return async function handle(request) {
@@ -56,7 +68,7 @@ export function makeWorkerApp({ store, telegram, content, env = process.env, log
       catch (error) { log(`Update handling failed (code ${Number(error.code) || 'internal'}). Update bodies are not logged.`); }
       return reply(200, { ok: true });
     }
-    if (url.pathname === '/health' && request.method === 'GET') return reply(200, { ok: true, app: 'vibentry', bot: await ensureBot() });
+    if (url.pathname === '/health' && request.method === 'GET') { const state = await ensureBot(); return reply(200, { ok: true, app: 'vibentry', bot: state, ...(state === 'telegram-error' && botError ? { botError } : {}) }); }
     ensureBot();
     const response = nodeResponse();
     try {

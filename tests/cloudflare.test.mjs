@@ -44,7 +44,7 @@ import { createHmac } from 'node:crypto';
 import { Store } from '../server/store.mjs';
 import { WEBHOOK_PATH, isAppRoute, isPublicAsset, makeWorkerApp, serveAsset, webhookSecret, withSecurityHeaders } from '../server/worker-app.mjs';
 
-const TOKEN = 'synthetic-test-token-not-a-credential';
+const TOKEN = '123456789:synthetic_test_token_not_a_credential';
 const APP = 'https://vibentry.example.workers.dev';
 function signed(id = 42) {
   const data = new URLSearchParams({ auth_date: String(Math.floor(Date.now() / 1000)), user: JSON.stringify({ id, first_name: 'Пользователь' }), query_id: 'test' });
@@ -119,4 +119,18 @@ test('Worker: bundled public files are served with type and headers; anything el
   assert.equal(png.headers.get('content-type'), 'image/png'); assert.equal((await png.arrayBuffer()).byteLength, 2);
   assert.equal(await serveAsset(files, new Request(APP + '/', { method: 'HEAD' })).text(), '');
   for (const miss of ['/missing.css', '/.env', '/data/lessons.json', '/server/worker.mjs']) assert.equal(serveAsset(files, new Request(APP + miss)).status, 404, miss);
+});
+test('Worker /health explains bot setup failures without exposing the token', async () => {
+  const run = async (token, telegramApi) => {
+    const telegram = { isMember: async () => true, api: telegramApi };
+    const handle = makeWorkerApp({ store: new Store(':memory:'), telegram, content: {}, env: { BOT_TOKEN: token, APP_URL: APP }, log: () => {} });
+    const response = await handle(new Request(APP + '/health'));
+    const text = await response.text(); assert.equal(text.includes(token), false); return JSON.parse(text);
+  };
+  const never = async () => { throw new Error('must not call Telegram'); };
+  for (const bad of [' ' + TOKEN, 'bot' + TOKEN, `"${TOKEN}"`, 'not-a-token']) assert.equal((await run(bad, never)).bot, 'token-format', bad);
+  const unauthorized = async () => { const error = new Error('Telegram API request failed'); error.code = 401; error.description = 'Unauthorized'; throw error; };
+  assert.deepEqual(await run(TOKEN, unauthorized), { ok: true, app: 'vibentry', bot: 'telegram-error', botError: { step: 'getWebhookInfo', code: 401, description: 'Unauthorized' } });
+  const menuFails = async method => { if (method === 'getWebhookInfo') return { url: '' }; if (method === 'setChatMenuButton') { const error = new Error('x'); error.code = 400; throw error; } return true; };
+  assert.equal((await run(TOKEN, menuFails)).botError.step, 'configureBot');
 });
