@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 // Platform-neutral store. `db` is anything with exec(sql) and prepare(sql).get/all/run(...args) -> {changes}:
 // node:sqlite on a server (server/store.mjs), Durable Object SQLite on Cloudflare (server/durable-sql.mjs).
 // Every table with data worth keeping, parents before children (orders before payments and invoices).
-export const BACKUP_TABLES = ['users', 'orders', 'payments', 'refunds', 'provider_invoices', 'progress', 'settings', 'promo_codes', 'audit', 'favorites', 'task_checks', 'events'];
+export const BACKUP_TABLES = ['users', 'orders', 'payments', 'refunds', 'provider_invoices', 'progress', 'settings', 'promo_codes', 'audit', 'favorites', 'task_checks', 'events', 'exercise_results'];
 export const FAVORITE_KINDS = ['prompt', 'lesson', 'article'];
 export const FAVORITES_LIMIT = 200;
 const FAVORITES_COLUMNS = 'user_id INTEGER NOT NULL, kind TEXT NOT NULL, item_id TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY(user_id, kind, item_id)';
@@ -47,6 +47,9 @@ export class StoreCore {
       INSERT INTO events (user_id, type, meta, at) SELECT user_id, 'lesson_done', CAST(lesson_id AS TEXT), completed_at FROM progress;
       INSERT INTO events (user_id, type, meta, at) SELECT user_id, 'paid', provider, paid_at * 1000 FROM payments WHERE provider != 'manual';
       DROP TABLE funnel_events;`);
+    // Lesson exercises (server/exercises.mjs): the last answer and its check, the version of the exercise it was made for,
+    // and whether it was ever passed (a later failed retry does not take a passed result away).
+    this.db.exec('CREATE TABLE IF NOT EXISTS exercise_results (user_id INTEGER NOT NULL, exercise_id TEXT NOT NULL, version INTEGER NOT NULL, answer TEXT NOT NULL, result TEXT NOT NULL, passed INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL, PRIMARY KEY(user_id, exercise_id))');
     this.db.exec("CREATE TABLE IF NOT EXISTS provider_invoices (provider TEXT NOT NULL, external_id TEXT NOT NULL, order_id TEXT NOT NULL REFERENCES orders(id), created_at INTEGER NOT NULL, PRIMARY KEY(provider, external_id))");
   }
   createOrder(userId, stars, mode, promo = null) { const id = randomUUID(); this.db.prepare('INSERT INTO orders (id,user_id,stars,mode,created_at,promo) VALUES (?,?,?,?,?,?)').run(id, userId, stars, mode, Date.now(), promo); return this.order(id); }
@@ -121,6 +124,15 @@ export class StoreCore {
   webhookSeen(provider) { return Number(this.db.prepare('SELECT value FROM settings WHERE key=?').get('webhook_seen_' + provider)?.value) || 0; }
   probeWrite(now = Date.now()) { this.db.prepare("INSERT INTO settings VALUES ('health_probe',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(String(now)); return Number(this.db.prepare("SELECT value FROM settings WHERE key='health_probe'").get()?.value) === now; }
   lastPaidAt() { return this.db.prepare("SELECT MAX(paid_at) AS at FROM payments WHERE provider != 'manual' AND charge_id NOT IN (SELECT charge_id FROM refunds)").get()?.at || 0; }
+  // ---- lesson exercises ----
+  exerciseResults(userId) {
+    const parse = v => { try { return JSON.parse(v); } catch { return null; } };
+    return new Map(this.db.prepare('SELECT * FROM exercise_results WHERE user_id=?').all(userId).map(r => [r.exercise_id, { version: r.version, answer: parse(r.answer), result: parse(r.result), passed: !!r.passed, attempts: r.attempts, updatedAt: r.updated_at }]));
+  }
+  saveExerciseResult(userId, exerciseId, version, answer, result, now = Date.now()) {
+    this.db.prepare(`INSERT INTO exercise_results (user_id, exercise_id, version, answer, result, passed, attempts, updated_at) VALUES (?,?,?,?,?,?,1,?)
+      ON CONFLICT(user_id, exercise_id) DO UPDATE SET version=excluded.version, answer=excluded.answer, result=excluded.result, passed=MAX(passed, excluded.passed), attempts=attempts+1, updated_at=excluded.updated_at`).run(userId, exerciseId, version, JSON.stringify(answer), JSON.stringify(result), result.passed ? 1 : 0, now);
+  }
   // ---- funnel events ----
   addEvent(userId, type, meta = null, now = Date.now()) {
     if (!EVENT_TYPES.includes(type) || !Number.isSafeInteger(userId)) return false;

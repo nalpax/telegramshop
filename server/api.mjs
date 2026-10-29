@@ -5,6 +5,7 @@ import { fingerprint } from './fingerprint.mjs';
 import { FREE_PRACTICE_LAUNCHES, HANDOVER, QUIZ, TRAINER_IDS } from './practice-data.mjs';
 import { MAX_OFFER_PERCENT, offerSettings } from './offers.mjs';
 import { FAVORITES_LIMIT, FAVORITE_KINDS } from './store-core.mjs';
+import { EXERCISES, checkAnswer, cleanAnswer, exerciseById, exerciseCard, projectState, publicExercise } from './exercises.mjs';
 
 const CLIENT_EVENTS = ['app_open', 'lesson_open', 'paywall_view', 'checkout_start'];
 const CHECKOUT_METHODS = ['stars', 'platega', 'cryptobot', 'xrocket', 'stub'];
@@ -34,7 +35,7 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
   }
   // Scraping guard: a real reader opens a handful of pages; a script pulls everything in seconds.
   const windows = new Map();
-  const limits = { content: 40, prompts: 200, favorites: 120, events: 120 };
+  const limits = { content: 40, prompts: 200, favorites: 120, events: 120, exercises: 90 };
   function overLimit(userId, bucket) {
     const key = `${bucket}:${userId}`; const now = Date.now(); const hits = (windows.get(key) || []).filter(time => now - time < 600000);
     hits.push(now); windows.set(key, hits);
@@ -126,8 +127,11 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
     // Bookmarks: GET /api/favorites, PUT|DELETE /api/favorites/:kind/:id (initData in the header, like GET requests).
     const favoriteMatch = url.pathname.match(/^\/api\/favorites\/([a-z]{1,16})\/([A-Za-z0-9-]{1,64})$/);
     const favoriteRoute = (url.pathname === '/api/favorites' && request.method === 'GET') || (favoriteMatch && ['PUT', 'DELETE'].includes(request.method));
-    const acceptedPost = (['/api/session', '/api/progress', '/api/invoice', '/api/promo', '/api/marks', '/api/practice', '/api/event', '/api/onboarding'].includes(url.pathname) || url.pathname.startsWith('/api/admin/')) && request.method === 'POST';
-    if (!acceptedPost && !favoriteRoute && !((lessonMatch || resourceMatch || promptMatch || articleMatch || listRoute || adminRoute || orderMatch) && request.method === 'GET')) return send(404, { error: 'Unknown API endpoint' });
+    // Learning project and lesson exercises (server/exercises.mjs): GET /api/project, GET /api/exercises, GET|POST /api/exercises/:id.
+    const exerciseMatch = url.pathname.match(/^\/api\/exercises\/([a-z0-9-]{1,40})$/);
+    const learningGet = ['/api/project', '/api/exercises'].includes(url.pathname) || exerciseMatch;
+    const acceptedPost = (exerciseMatch || ['/api/session', '/api/progress', '/api/invoice', '/api/promo', '/api/marks', '/api/practice', '/api/event', '/api/onboarding'].includes(url.pathname) || url.pathname.startsWith('/api/admin/')) && request.method === 'POST';
+    if (!acceptedPost && !favoriteRoute && !((learningGet || lessonMatch || resourceMatch || promptMatch || articleMatch || listRoute || adminRoute || orderMatch) && request.method === 'GET')) return send(404, { error: 'Unknown API endpoint' });
     if (preview && url.pathname === '/api/session') return send(200, { preview: true, user: null, subscribed: false, access: { active: false }, done: [] });
     const data = acceptedPost ? await body(request) : {};
     const user = validateInitData(acceptedPost ? data.initData : request.headers['x-telegram-init-data'], process.env.BOT_TOKEN);
@@ -139,6 +143,14 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
       if (url.pathname === '/api/articles') return send(200, articleList());
       const sample = articleMatch && articleIndex.get(articleMatch[1]);
       if (sample?.free) return send(200, { id: sample.id, title: sample.title, groupTitle: sample.groupTitle, markdown: sample.markdown });
+      if (url.pathname === '/api/project') return send(200, projectState({ canOpen: id => id <= FREE_LESSONS }));
+      if (url.pathname === '/api/exercises') return send(200, { items: EXERCISES.map(x => ({ ...exerciseCard(x), open: x.lesson <= FREE_LESSONS, passed: false, attempts: 0 })) });
+    }
+    if (preview && exerciseMatch) {
+      const x = exerciseById(exerciseMatch[1]);
+      if (!x || x.lesson > FREE_LESSONS) return send(x ? 403 : 404, { error: x ? 'Purchase required' : 'Unknown exercise', reason: 'payment' });
+      if (request.method === 'GET') return send(200, { exercise: publicExercise(x), saved: null });
+      return send(200, { result: checkAnswer(x, data.answer), saved: false });
     }
     if (!user) return send(401, { error: 'Open the app from Telegram' });
     if (adminRoute) {
@@ -349,6 +361,23 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
         else if (store.addFavorite(user.id, kind, itemId) === 'limit') return send(409, { error: `Можно сохранить до ${FAVORITES_LIMIT} закладок. Уберите лишние в «Избранном».` });
       }
       return send(200, favoriteList(user.id));
+    }
+    if (learningGet) {
+      const canOpen = lessonId => lessonId <= FREE_LESSONS || !!access.active;
+      if (url.pathname === '/api/project') return send(200, projectState({ done: store.getProgress(user.id), results: store.exerciseResults(user.id), canOpen }));
+      const results = store.exerciseResults(user.id);
+      if (url.pathname === '/api/exercises') return send(200, { items: EXERCISES.map(x => ({ ...exerciseCard(x), open: canOpen(x.lesson), passed: !!results.get(x.id)?.passed, attempts: results.get(x.id)?.attempts || 0 })) });
+      const x = exerciseById(exerciseMatch[1]);
+      if (!x) return send(404, { error: 'Unknown exercise' });
+      // Same rule as the lesson itself: free lessons after subscribing, the rest after the purchase.
+      if (!canOpen(x.lesson)) return send(403, { error: 'Purchase required', reason: 'payment', card: exerciseCard(x) });
+      const saved = results.get(x.id) || null;
+      const savedView = saved && { ...saved, outdated: saved.version !== x.version };
+      if (request.method === 'GET') return send(200, { exercise: publicExercise(x), saved: savedView });
+      if (overLimit(user.id, 'exercises')) return send(429, { error: 'Слишком много попыток подряд. Подождите несколько минут.' });
+      const result = checkAnswer(x, data.answer);
+      store.saveExerciseResult(user.id, x.id, x.version, cleanAnswer(x, data.answer), result);
+      return send(200, { result, saved: true, passed: !!store.exerciseResults(user.id).get(x.id)?.passed });
     }
     if (url.pathname === '/api/marks') {
       if (request.method === 'GET') return send(200, store.marks(user.id));
