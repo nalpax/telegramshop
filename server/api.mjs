@@ -108,7 +108,7 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
     const articleMatch = url.pathname.match(/^\/api\/articles\/([a-z0-9-]+)$/);
     const listRoute = ['/api/prompts', '/api/articles', '/api/marks'].includes(url.pathname);
     const orderMatch = url.pathname.match(/^\/api\/order\/([0-9a-f-]{36})$/);
-    const acceptedPost = (['/api/session', '/api/progress', '/api/invoice', '/api/promo', '/api/marks', '/api/practice'].includes(url.pathname) || url.pathname.startsWith('/api/admin/')) && request.method === 'POST';
+    const acceptedPost = (['/api/session', '/api/progress', '/api/invoice', '/api/promo', '/api/marks', '/api/practice', '/api/event'].includes(url.pathname) || url.pathname.startsWith('/api/admin/')) && request.method === 'POST';
     if (!acceptedPost && !((lessonMatch || resourceMatch || promptMatch || articleMatch || listRoute || adminRoute || orderMatch) && request.method === 'GET')) return send(404, { error: 'Unknown API endpoint' });
     if (preview && url.pathname === '/api/session') return send(200, { preview: true, user: null, subscribed: false, access: { active: false }, done: [] });
     const data = acceptedPost ? await body(request) : {};
@@ -145,6 +145,14 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
         return send(200, { ...store.settings(), current: offerFor(store) });
       }
       if (route === 'overview' && get) return send(200, overview());
+      if (route === 'funnel' && get) {
+        const days = Number.parseInt(url.searchParams.get('days') || '', 10);
+        const admins = (process.env.ADMIN_IDS || '').split(',').map(s => Number(s.trim())).filter(Number.isSafeInteger);
+        const f = store.funnel(days > 0 ? Date.now() - days * 86400000 : 0, FREE_LESSONS, admins);
+        const labels = [['opened', 'Открыли приложение'], ['subscribed', 'Подписались на канал'], ['lesson1', 'Прошли урок 01'], ['free', `Прошли бесплатную часть (01–${String(FREE_LESSONS).padStart(2, '0')})`], ['tariff', 'Открыли тариф'], ['pay', 'Нажали «Оплатить»'], ['bought', 'Купили']];
+        const pct = (a, b) => (b ? Math.round(a / b * 100) : 0);
+        return send(200, { days: days > 0 ? days : null, steps: labels.map(([id, label], i) => ({ id, label, count: f[id], ofTotal: pct(f[id], f.opened), ofPrevious: i ? pct(f[id], f[labels[i - 1][0]]) : 100 })), offers: store.offerStats() });
+      }
       if (route === 'users' && get) {
         const plan = ['all', 'free', 'pro'].includes(url.searchParams.get('plan')) ? url.searchParams.get('plan') : 'all';
         const page = Math.max(0, Number.parseInt(url.searchParams.get('page') || '0', 10) || 0);
@@ -206,6 +214,12 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
       }
       return send(404, { error: 'Unknown API endpoint' });
     }
+    // Funnel events from the app. The tariff can be opened before subscribing, so this comes before the subscription check.
+    if (url.pathname === '/api/event') {
+      if (!['tariff_open', 'pay_click'].includes(data.step)) return send(400, { error: 'Unknown step' });
+      store.upsertUser(user); store.markStep(user.id, data.step);
+      return send(200, { ok: true });
+    }
     if (url.pathname === '/api/session' || url.pathname === '/api/practice') store.upsertUser(user);
     let subscribed;
     let subscriptionUnavailable = false;
@@ -217,6 +231,7 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
       subscribed = false; subscriptionUnavailable = true;
     }
     const access = store.entitlement(user.id);
+    if (subscribed && url.pathname === '/api/session') store.markStep(user.id, 'subscribed');
     const practice = () => ({ unlimited: !!access.active, limit: FREE_PRACTICE_LAUNCHES, remaining: Math.max(0, FREE_PRACTICE_LAUNCHES - store.practiceUsed(user.id)) });
     if (url.pathname === '/api/session') return send(200, { user, subscribed, access, done: store.getProgress(user.id), isAdmin: isAdmin(user.id), practice: practice(), personalOffer: (({ code, percent, expires_at } = {}) => (code ? { code, percent, expiresAt: expires_at } : null))(store.activePersonalPromo(user.id) || undefined), ...(subscriptionUnavailable ? { subscriptionUnavailable } : {}) });
     if (!subscribed) return send(403, { error: 'Channel subscription required', reason: 'channel' });

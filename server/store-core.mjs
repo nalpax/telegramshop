@@ -21,6 +21,7 @@ export class StoreCore {
     addColumn('promo_codes', 'user_id', 'INTEGER'); addColumn('promo_codes', 'nudged', 'INTEGER NOT NULL DEFAULT 0'); addColumn('users', 'reminded_at', 'INTEGER');
     addColumn('payments', 'provider', "TEXT NOT NULL DEFAULT 'stars'"); addColumn('payments', 'amount', 'REAL'); addColumn('payments', 'currency', 'TEXT');
     this.db.exec(`CREATE TABLE IF NOT EXISTS favorites (user_id INTEGER NOT NULL, prompt_id TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY(user_id, prompt_id));
+      CREATE TABLE IF NOT EXISTS funnel_events (user_id INTEGER NOT NULL, step TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY(user_id, step));
       CREATE TABLE IF NOT EXISTS task_checks (user_id INTEGER NOT NULL, lesson_id INTEGER NOT NULL, item INTEGER NOT NULL, PRIMARY KEY(user_id, lesson_id, item));`);
     this.db.exec("CREATE TABLE IF NOT EXISTS provider_invoices (provider TEXT NOT NULL, external_id TEXT NOT NULL, order_id TEXT NOT NULL REFERENCES orders(id), created_at INTEGER NOT NULL, PRIMARY KEY(provider, external_id))");
   }
@@ -71,6 +72,23 @@ export class StoreCore {
   markReminded(userId, now = Date.now()) { this.db.prepare('UPDATE users SET reminded_at=? WHERE id=?').run(now, userId); }
   setReminders(userId, on) { this.db.prepare('UPDATE users SET reminders_off=? WHERE id=?').run(on ? 0 : 1, userId); }
   remindersOn(userId) { return !this.db.prepare('SELECT reminders_off FROM users WHERE id=?').get(userId)?.reminders_off; }
+  // ---- funnel: the first time each person reaches a step ----
+  markStep(userId, step, now = Date.now()) { this.db.prepare('INSERT OR IGNORE INTO funnel_events VALUES (?,?,?)').run(userId, step, now); }
+  // Administrators are left out: the owner tests the app all the time and would skew the numbers.
+  funnel(since = 0, freeLessons = 5, exclude = []) {
+    const ids = exclude.filter(Number.isSafeInteger).join(',') || '0';
+    const cohort = `SELECT id FROM users WHERE first_seen >= ? AND id NOT IN (${ids})`;
+    const n = (sql, ...args) => this.db.prepare(sql).get(...args).n;
+    const step = name => n(`SELECT COUNT(*) AS n FROM funnel_events WHERE step=? AND user_id IN (${cohort})`, name, since);
+    return {
+      opened: n(`SELECT COUNT(*) AS n FROM (${cohort})`, since),
+      subscribed: step('subscribed'),
+      lesson1: n(`SELECT COUNT(DISTINCT user_id) AS n FROM progress WHERE lesson_id=1 AND user_id IN (${cohort})`, since),
+      free: n(`SELECT COUNT(*) AS n FROM (SELECT user_id FROM progress WHERE lesson_id <= ? AND user_id IN (${cohort}) GROUP BY user_id HAVING COUNT(*) = ?)`, freeLessons, since, freeLessons),
+      tariff: step('tariff_open'), pay: step('pay_click'),
+      bought: n(`SELECT COUNT(DISTINCT user_id) AS n FROM payments WHERE provider != 'manual' AND charge_id NOT IN (SELECT charge_id FROM refunds) AND user_id IN (${cohort})`, since),
+    };
+  }
   // ---- automatic offers (server/offers.mjs) ----
   offerSettings() { try { return JSON.parse(this.db.prepare("SELECT value FROM settings WHERE key='auto_offers'").get()?.value || '{}'); } catch { return {}; } }
   saveOfferSettings(value) { this.db.prepare("INSERT INTO settings VALUES ('auto_offers',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify(value)); }

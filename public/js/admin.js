@@ -10,7 +10,7 @@ const fullName = u => [u.firstName, u.lastName].filter(Boolean).join(' ') || 'Б
 export const planBadge = plan => `<span class="plan-badge plan-${plan === 'pro' ? 'pro' : 'free'}">${plan === 'pro' ? 'Pro' : 'Free'}</span>`;
 
 export function createAdmin({ sendApi, getApi, toast, modal, closeModal, config, refreshConfig, getSession }) {
-  const state = { tab: 'overview', overview: null, users: null, q: '', plan: 'all', page: 0, audit: null, error: false, loading: false };
+  const state = { tab: 'overview', overview: null, users: null, q: '', plan: 'all', page: 0, audit: null, funnel: null, funnelDays: 30, error: false, loading: false };
   let searchTimer;
   const root = () => document.querySelector('#admin-root');
 
@@ -18,6 +18,7 @@ export function createAdmin({ sendApi, getApi, toast, modal, closeModal, config,
     state.loading = true; state.error = false;
     try {
       if (what === 'overview' || what === 'offers' || what === 'access') state.overview = await getApi('/api/admin/overview');
+      if (what === 'overview') state.funnel = await getApi(`/api/admin/funnel${state.funnelDays ? '?days=' + state.funnelDays : ''}`);
       if (what === 'users') state.users = await getApi(`/api/admin/users?plan=${state.plan}&page=${state.page}&q=${encodeURIComponent(state.q)}`);
       if (what === 'log') state.audit = await getApi('/api/admin/audit');
     } catch { state.error = true; }
@@ -37,10 +38,18 @@ export function createAdmin({ sendApi, getApi, toast, modal, closeModal, config,
   }
 
   const revenueText = s => { const parts = (s.revenueBy || []).map(r => r.currency === 'XTR' ? `${r.total} ★` : r.currency === 'RUB' ? `${r.total} ₽` : `${r.total} ${r.currency}`); return parts.length ? parts.join(' · ') : '0'; };
+  // Where people stop on the way to a purchase. Admins are not counted.
+  function funnelCard() {
+    const f = state.funnel; if (!f) return '';
+    const chips = [[30, '30 дней'], [0, 'Всё время']].map(([d, label]) => `<button class="chip ${state.funnelDays === d ? 'is-active' : ''}" data-adm="funnel-days" data-id="${d}">${label}</button>`).join('');
+    const rows = f.steps.map((step, i) => `<div class="funnel-row"><div class="funnel-head"><span>${e(step.label)}</span><strong>${step.count}</strong></div><progress max="100" value="${Math.min(100, step.ofTotal)}" aria-label="${step.ofTotal}% от всех"></progress><small>${step.ofTotal}% от всех${i ? ` · ${step.ofPrevious}% от предыдущего шага` : ''}</small></div>`).join('');
+    return `<section class="admin-card"><h2>Воронка</h2><div class="chips">${chips}</div><p class="form-hint">Люди, которые впервые открыли приложение за выбранный период. Каждый шаг считается один раз на человека; администраторы не учитываются. Выданный вручную Pro — не покупка.</p>${f.steps[0].count ? rows : '<p class="admin-empty">Пока никого нет.</p>'}${f.offers?.sent ? `<p class="form-hint">Автоскидки: отправлено ${f.offers.sent}, использовано ${f.offers.used}.</p>` : ''}</section>`;
+  }
   function overviewTab() {
     const s = state.overview.stats;
     const card = (label, value, hint = '') => `<div class="stat-card"><small>${label}</small><strong>${value}</strong>${hint ? `<span>${hint}</span>` : ''}</div>`;
     return `<div class="stat-grid">${card('Участников', s.users, `+${s.new7} за 7 дней`)}${card('Pro', s.pro, `конверсия ${s.conversion}%`)}${card('Free', s.free)}${card('Выручка', revenueText(s), s.refunds ? `возвратов: ${s.refunds}` : 'без возвратов')}</div>
+    ${funnelCard()}
     <section class="admin-card"><h2>Последние 14 дней</h2>${chart(s)}</section>
     <section class="admin-card"><h2>Сейчас в продаже</h2><p class="admin-line">${(() => { const p = state.overview.prices || {}; const parts = [p.rub && `${p.rub} ₽`, p.stars && `${p.stars} ★`, p.usdt && `${p.usdt} USDT`].filter(Boolean); return parts.length ? `<strong>${parts.join(' · ')}</strong>${p.salePercent ? ` · скидка −${p.salePercent}%` : ' · без скидки'} · доступ навсегда` : 'Цена не задана — оплата выключена.'; })()}</p><p class="admin-line">Для бесплатных уроков: ${state.overview.effectiveChannels.length ? state.overview.effectiveChannels.map(c => `<b>${e(c.title)}</b>`).join(', ') : '<b class="warn">каналы не заданы — приложение никого не пустит</b>'}</p></section>`;
   }
@@ -128,6 +137,7 @@ export function createAdmin({ sendApi, getApi, toast, modal, closeModal, config,
       try { await sendApi(`/api/admin/${action}`, { userId: Number(id) }); toast(action === 'grant' ? 'Pro выдан.' : 'Pro отозван.'); closeModal(); state.users = null; state.overview = null; load(state.tab); }
       catch { toast('Не получилось. Попробуйте ещё раз.'); target.disabled = false; }
     }
+    else if (action === 'funnel-days') { state.funnelDays = Number(target.dataset.id); load('overview'); }
     else if (action === 'save-auto-offers') {
       const form = document.querySelector('#auto-offers-form'); if (!form.reportValidity()) return;
       target.disabled = true;
