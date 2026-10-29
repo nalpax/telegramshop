@@ -83,9 +83,43 @@ function home() {
   return `<header class="home-header">${brand()}</header>
   ${hero()}
   <section class="continue-card" aria-labelledby="continue-title"><div class="continue-top"><span class="eyebrow">${eyebrow}</span>${icon(freeDone ? 'check' : 'sparkle')}</div><h2 id="continue-title">${title}</h2><div class="progress-caption"><span>Пройдено ${progress.done.length} из 24 уроков</span><span>${percent}%</span></div><progress max="24" value="${progress.done.length}" aria-label="Прогресс курса"></progress>${freeDone ? `<a class="button button-primary" href="#next">${label}${icon('arrow')}</a>` : `<button class="button button-primary" data-action="lesson" data-id="${next.id}">${label}${icon('arrow')}</button>`}</section>
+  ${homeStats()}${homePath()}<div class="home-duo">${dailyPrompt()}${homeCategories()}</div>
   <section class="quick-section" aria-labelledby="quick-title"><div class="section-heading"><h2 id="quick-title">Быстрый доступ</h2></div><div class="quick-grid">${tile('Уроки', `24 урока,<br>${FREE_LESSONS} бесплатно`, 'book', urlFor())}${tile('Промпты', '300 запросов<br>для ИИ', 'prompts', urlFor('prompts'))}${tile('База', 'Инструменты, ниши,<br>клиенты, заказы', 'files', urlFor('base'))}${tile(session?.access?.active ? 'Мой доступ' : 'Полный доступ', session?.access?.active ? 'Всё открыто,<br>навсегда' : priceLabel() ? `${priceLabel()}<br>навсегда` : 'Один платёж,<br>навсегда', 'plane', '#access', 'access')}</div></section>
   <a class="practice-teaser" href="#practice"><span class="practice-glyph">${icon('play')}</span><span><strong>Практикум</strong><small>Конструктор промпта, квиз, калькулятор оценки и проверка перед сдачей${session?.practice && !session.practice.unlimited ? ` · бесплатно ${session.practice.remaining} из ${session.practice.limit} запусков` : ''}</small></span>${icon('arrow')}</a>
   <p class="home-note">Одна сделанная страница полезнее десяти прочитанных.</p>${nav('home')}`;
+}
+// Home blocks from the v1.1 design (handoff/CHANGES_v1.0_design.md): stats, course path, prompt of the day, prompt categories.
+function homeStats() {
+  const done = progress.done.length;
+  const modulesDone = modules.filter(m => lessons.filter(l => l.module === m.id).every(l => progress.done.includes(l.id))).length;
+  const p = config.library?.prompts || 300, a = config.library?.articles || 0;
+  const cell = (n, label, tone) => `<div class="stat-tile tone-${tone}"><strong>${n}</strong><span>${label}</span></div>`;
+  return `<section class="home-stats" aria-label="Коротко о курсе">${cell(`${done}<small>/24</small>`, 'уроков пройдено', 'lime')}${cell(`${modulesDone}<small>/${modules.length}</small>`, 'модулей закрыто', 'sky')}${cell(p, 'готовых промптов', 'amber')}${a ? cell(a, 'материалов в базе', 'coral') : ''}</section>`;
+}
+function homePath() {
+  const cards = modules.map(m => {
+    const ids = lessons.filter(l => l.module === m.id).map(l => l.id);
+    const done = ids.filter(id => progress.done.includes(id)).length;
+    const next = ids.find(id => !progress.done.includes(id));
+    return `<button class="path-card hue-${m.id}" data-action="lesson" data-id="${next || ids[0]}"><span class="path-num">${String(m.id).padStart(2, '0')}</span><span class="path-body"><strong>${m.title}</strong><small>${m.description}</small></span><span class="path-foot"><progress max="${ids.length}" value="${done}" aria-label="${m.title}: пройдено ${done} из ${ids.length}"></progress><em>${done}/${ids.length} · уроки ${m.range}</em></span></button>`;
+  }).join('');
+  return `<section class="home-path" aria-labelledby="path-title"><div class="section-heading"><h2 id="path-title">Путь курса</h2><span class="section-meta">4 модуля — от пустой папки до сдачи проекта</span></div><div class="path-grid">${cards}</div></section>`;
+}
+function dailyPrompt() {
+  const items = library.prompts?.items;
+  if (!items?.length) return '<section class="daily daily-empty" id="daily" aria-hidden="true"></section>';
+  const item = items[Math.floor(Date.now() / 86400000) % items.length];
+  return `<section class="daily" id="daily" aria-labelledby="daily-title"><span class="eyebrow">ПРОМПТ ДНЯ · №${e(item.id)}</span><h2 id="daily-title">${e(item.title)}</h2><p>${e(item.use || '')}</p><div class="daily-actions"><button class="button button-primary" data-action="prompt" data-id="${e(item.id)}">Открыть промпт${icon('arrow')}</button><button class="copy-quick daily-copy" data-action="quick-copy" data-id="${e(item.id)}" aria-label="Скопировать промпт">${icon('copy')}</button></div></section>`;
+}
+function homeCategories() {
+  const cats = library.prompts?.categories;
+  if (!cats?.length) return '<section class="cats cats-empty" id="cats" aria-hidden="true"></section>';
+  return `<section class="cats" id="cats" aria-labelledby="cats-title"><div class="section-heading"><h2 id="cats-title">Промпты по задачам</h2><span class="section-meta">${cats.length} категорий</span></div><div class="cat-cloud">${cats.slice(0, 12).map((c, i) => `<button class="cat-chip hue-${i % 4 + 1}" data-action="home-category" data-id="${e(c.id)}">${e(c.title)}<em>${c.ids?.length ?? ''}</em></button>`).join('')}<button class="cat-chip cat-all" data-action="home-category" data-id="all">Все промпты${icon('arrow')}</button></div></section>`;
+}
+function refreshHome() {
+  if (route().name !== 'home') return;
+  const d = document.querySelector('#daily'), c = document.querySelector('#cats');
+  if (d) d.outerHTML = dailyPrompt(); if (c) c.outerHTML = homeCategories();
 }
 // Shown after the last free lesson: what the buyer gets next, the price, one clear button. No invented reviews or income.
 function afterFree() {
@@ -96,13 +130,6 @@ function afterFree() {
   <section class="after-plan" aria-label="Что дальше">${next.map(m => `<div class="after-module"><span class="after-range">${m.range}</span><div><strong>${e(m.title)}</strong><small>${e(m.description)} · ${m.end - m.start + 1} ${plural(m.end - m.start + 1, 'урок', 'урока', 'уроков')}</small></div></div>`).join('')}<div class="after-module"><span class="after-range">${icon('copy')}</span><div><strong>300 промптов</strong><small>Готовые запросы для каждого этапа: от брифа до сдачи проекта</small></div></div><div class="after-module"><span class="after-range">${icon('file')}</span><div><strong>База материалов</strong><small>Инструменты, ниши, поиск клиентов, оценка и правки</small></div></div><div class="after-module"><span class="after-range">${icon('play')}</span><div><strong>«Практикум» без ограничений</strong><small>Конструктор промпта, квиз, калькулятор оценки, проверка перед сдачей</small></div></div></section>
   <div class="after-price">${price ? `<strong>${e(price)}</strong><span>один раз · доступ навсегда · без подписки</span>` : '<span>Цена появится перед началом продаж</span>'}</div>
   <button class="button button-primary" data-action="access">${price ? `Открыть весь курс за ${e(price)}` : 'Подробнее о полном доступе'}${icon('arrow')}</button><a class="button button-secondary" href="${urlFor()}">Вернуться к урокам</a><p class="welcome-note">Курс учит навыкам, но не гарантирует заказов и дохода.</p></main>${nav('home')}`;
-}
-// Module header: illustration, title, what it covers and a progress ring (steps of 10% are CSS classes: no inline styles).
-function moduleCover(m) {
-  const total = m.end - m.start + 1; const done = progress.done.filter(id => id >= m.start && id <= m.end).length;
-  const locked = m.end > FREE_LESSONS && !session?.access?.active;
-  const label = m.end <= FREE_LESSONS ? '<span class="free-label">Бесплатно после подписки</span>' : locked ? `<span class="cover-lock">${icon('lock')}Полный доступ</span>` : '';
-  return `<div class="module-cover cover-${m.id}">${art(m.art)}<div class="cover-text"><span class="eyebrow">МОДУЛЬ ${m.id} · ${m.range}</span><h2>${e(m.title)}</h2><p>${e(m.description)}</p>${label}</div><span class="ring ring-${Math.round(done / total * 10) * 10}" role="img" aria-label="Пройдено ${done} из ${total}"><span>${done}/${total}</span></span></div>`;
 }
 let justDone = 0;
 function lessonRow(lesson) {
@@ -159,7 +186,8 @@ function catalogueBody(tab) {
   return modules.map(m => {
     const rows = lessons.filter(l => l.module === m.id && matches(query, l.title, l.id));
     if (!rows.length) return '';
-    return `<section class="module-section">${moduleCover(m)}<div class="lesson-list">${rows.map(lessonRow).join('')}</div></section>`;
+    const meta = m.end <= FREE_LESSONS ? '<span class="free-label">Бесплатно после подписки</span>' : `${rows.length} ${plural(rows.length, 'урок', 'урока', 'уроков')}`;
+    return `<section class="module-section hue-${m.id}">${heading(m.range, m.title, meta)}<div class="lesson-list">${rows.map(lessonRow).join('')}</div></section>`;
   }).join('') || emptySearch();
 }
 // «Термины»: open to everyone; the term from a lesson (#materials?tab=terms&term=id) is highlighted.
@@ -265,7 +293,7 @@ function render() {
   closeModal(false);
   if (name === 'lesson') { try { tg?.BackButton.show(); } catch {} reader(Number(params.get('id')), epoch); }
   else if (name === 'article') { try { tg?.BackButton.show(); } catch {} articleReader(params.get('id') || '', epoch); }
-  else { try { if (name === 'home') tg?.BackButton.hide(); else tg?.BackButton.show(); } catch {} app.innerHTML = name === 'materials' ? catalogue(params) : name === 'profile' ? profile() : name === 'admin' ? adminScreen() : name === 'practice' ? practiceView(params) : name === 'next' && !session?.access?.active ? afterFree() : home(); if (name === 'buy') openAccess(params.get('promo') || session?.personalOffer?.code || null); if (name === 'practice' && practiceStarted.has(params.get('id'))) mountPractice(app, { copy }); }
+  else { try { if (name === 'home') tg?.BackButton.hide(); else tg?.BackButton.show(); } catch {} app.innerHTML = name === 'materials' ? catalogue(params) : name === 'profile' ? profile() : name === 'admin' ? adminScreen() : name === 'practice' ? practiceView(params) : name === 'next' && !session?.access?.active ? afterFree() : home(); if (name === 'home' && !library.prompts) loadLibrary('prompts').then(refreshHome); if (name === 'buy') openAccess(params.get('promo') || session?.personalOffer?.code || null); if (name === 'practice' && practiceStarted.has(params.get('id'))) mountPractice(app, { copy }); }
   window.scrollTo({ top: 0, behavior: 'instant' });
 }
 function toast(message) { const box = document.querySelector('#toast'); box.textContent = message; box.classList.add('visible'); clearTimeout(toastTimer); toastTimer = setTimeout(() => box.classList.remove('visible'), 3000); }
@@ -387,6 +415,7 @@ document.addEventListener('click', event => {
   if (action === 'favorite') toggleFavorite(target.dataset.id);
   if (action === 'task-item') toggleTask(target);
   if (action === 'term') openTerm(target.dataset.id);
+  if (action === 'home-category') { promptCategory = target.dataset.id; go(urlFor('prompts')); }
   if (action === 'onb-answer') { obAnswers[target.dataset.q] = target.dataset.id; obStep++; if (obStep >= 2) { obTip = true; session.onboarding = { ...obAnswers }; sendApi('/api/onboarding', obAnswers).catch(() => {}); } render(); }
   if (action === 'onb-skip') { obTip = false; session.onboarding = { goal: 'skip', experience: 'skip' }; sendApi('/api/onboarding', { skip: true }).catch(() => {}); go('#home'); }
   if (action === 'onb-start') { obTip = false; go('#lesson?id=' + Number(target.dataset.id)); }
