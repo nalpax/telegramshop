@@ -1,10 +1,10 @@
 // Lessons 01–05 open after the channel subscription. The server (FREE_LESSONS in server/telegram.mjs) enforces it.
 export const FREE_LESSONS = 5;
 export const modules = [
-  { id: 1, range: '01–05', title: 'Первый сайт', description: 'От пустой папки до живой ссылки', start: 1, end: 5 },
-  { id: 2, range: '06–13', title: 'Дизайн и запуск', description: 'Бриф, адаптивность, формы и публикация', start: 6, end: 13 },
-  { id: 3, range: '14–19', title: 'Портфолио и клиенты', description: 'Кейсы, ниша, отклики и созвоны', start: 14, end: 19 },
-  { id: 4, range: '20–24', title: 'Цена и сдача проекта', description: 'Оценка, условия, правки и поддержка', start: 20, end: 24 },
+  { id: 1, range: '01–05', title: 'Первый сайт', description: 'От пустой папки до живой ссылки', start: 1, end: 5, art: 'browser' },
+  { id: 2, range: '06–13', title: 'Дизайн и запуск', description: 'Бриф, адаптивность, формы и публикация', start: 6, end: 13, art: 'palette' },
+  { id: 3, range: '14–19', title: 'Портфолио и клиенты', description: 'Кейсы, ниша, отклики и созвоны', start: 14, end: 19, art: 'briefcase' },
+  { id: 4, range: '20–24', title: 'Цена и сдача проекта', description: 'Оценка, условия, правки и поддержка', start: 20, end: 24, art: 'coins' },
 ];
 const titles = [
   'С чего начать и какие инструменты нужны',

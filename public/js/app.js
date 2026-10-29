@@ -88,12 +88,20 @@ function afterFree() {
   <div class="after-price">${price ? `<strong>${e(price)}</strong><span>один раз · доступ навсегда · без подписки</span>` : '<span>Цена появится перед началом продаж</span>'}</div>
   <button class="button button-primary" data-action="access">${price ? `Открыть весь курс за ${e(price)}` : 'Подробнее о полном доступе'}${icon('arrow')}</button><a class="button button-secondary" href="${urlFor()}">Вернуться к урокам</a><p class="welcome-note">Курс учит навыкам, но не гарантирует заказов и дохода.</p></main>${nav('home')}`;
 }
+// Module header: illustration, title, what it covers and a progress ring (steps of 10% are CSS classes: no inline styles).
+function moduleCover(m) {
+  const total = m.end - m.start + 1; const done = progress.done.filter(id => id >= m.start && id <= m.end).length;
+  const locked = m.end > FREE_LESSONS && !session?.access?.active;
+  const label = m.end <= FREE_LESSONS ? '<span class="free-label">Бесплатно после подписки</span>' : locked ? `<span class="cover-lock">${icon('lock')}Полный доступ</span>` : '';
+  return `<div class="module-cover cover-${m.id}">${art(m.art)}<div class="cover-text"><span class="eyebrow">МОДУЛЬ ${m.id} · ${m.range}</span><h2>${e(m.title)}</h2><p>${e(m.description)}</p>${label}</div><span class="ring ring-${Math.round(done / total * 10) * 10}" role="img" aria-label="Пройдено ${done} из ${total}"><span>${done}/${total}</span></span></div>`;
+}
+let justDone = 0;
 function lessonRow(lesson) {
   const done = progress.done.includes(lesson.id);
   const locked = !lesson.free && !session?.access?.active;
   const active = lesson.id === progress.last && !done && !locked;
   const note = active ? '<small>Ваш следующий шаг</small>' : done ? '<small>Пройдено</small>' : '';
-  return `<button class="lesson-row ${active ? 'lesson-current' : ''} ${done ? 'lesson-done' : ''} ${locked ? 'lesson-locked' : ''}" data-action="lesson" data-id="${lesson.id}"><span class="lesson-number">${String(lesson.id).padStart(2, '0')}</span><span class="lesson-info"><strong>${e(lesson.title)}</strong>${note}</span><span class="lesson-status ${done ? 'done-badge' : ''}">${icon(done ? 'check' : locked ? 'lock' : 'chevron')}</span></button>`;
+  return `<button class="lesson-row ${active ? 'lesson-current' : ''} ${done ? 'lesson-done' : ''} ${locked ? 'lesson-locked' : ''} ${justDone === lesson.id ? 'just-done' : ''}" data-action="lesson" data-id="${lesson.id}"><span class="lesson-number">${String(lesson.id).padStart(2, '0')}</span><span class="lesson-info"><strong>${e(lesson.title)}</strong>${note}</span><span class="lesson-status ${done ? 'done-badge' : ''}">${icon(done ? 'check' : locked ? 'lock' : 'chevron')}</span></button>`;
 }
 const plural = (n, one, few, many) => { const a = n % 10, b = n % 100; return b > 10 && b < 20 ? many : a === 1 ? one : a > 1 && a < 5 ? few : many; };
 const matches = (query, ...parts) => !query || parts.join(' ').toLocaleLowerCase('ru').includes(query);
@@ -141,8 +149,7 @@ function catalogueBody(tab) {
   return modules.map(m => {
     const rows = lessons.filter(l => l.module === m.id && matches(query, l.title, l.id));
     if (!rows.length) return '';
-    const meta = m.end <= FREE_LESSONS ? '<span class="free-label">Бесплатно после подписки</span>' : `${rows.length} ${plural(rows.length, 'урок', 'урока', 'уроков')}`;
-    return `<section class="module-section">${heading(m.range, m.title, meta)}<div class="lesson-list">${rows.map(lessonRow).join('')}</div></section>`;
+    return `<section class="module-section">${moduleCover(m)}<div class="lesson-list">${rows.map(lessonRow).join('')}</div></section>`;
   }).join('') || emptySearch();
 }
 function emptySearch() { return `<div class="empty-state">${icon('search')}<h2>Пока ничего не нашлось</h2><p>Попробуйте другое слово или номер.</p></div>`; }
@@ -443,7 +450,7 @@ async function checkSubscription(button) {
 async function finishLesson() {
   const id = readerId; const button = document.querySelector('.finish-button'); button.disabled = true;
   try {
-    if (!config.preview) await sendApi('/api/progress', { lessonId: id }); complete(id);
+    if (!config.preview) await sendApi('/api/progress', { lessonId: id }); complete(id); justDone = id; setTimeout(() => { justDone = 0; }, 4000);
     try { tg?.HapticFeedback.notificationOccurred('success'); } catch {}
     if (id < 24 && (session?.access?.active || lessons[id]?.free)) { go('#lesson?id=' + (id + 1)); toast('Ещё один шаг. Отличная работа!'); }
     else if (id === FREE_LESSONS && !session?.access?.active) go('#next');

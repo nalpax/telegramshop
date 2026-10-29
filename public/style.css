@@ -353,3 +353,20 @@ body.reading .lesson-article img{-webkit-user-drag:none;pointer-events:none}
 .next-lesson{display:flex;width:100%;align-items:center;justify-content:space-between;gap:12px;margin-top:16px;padding:14px 16px;min-height:64px;border:1px solid var(--border);border-radius:16px;background:var(--surface);color:var(--text);text-align:left;text-decoration:none;font:inherit;cursor:pointer}
 .next-lesson span{display:flex;flex-direction:column;gap:2px}.next-lesson small{color:var(--soft);font-size:12px;letter-spacing:.04em;text-transform:uppercase}.next-lesson strong{font-size:15px;line-height:1.35}
 .next-lesson .icon{flex:none;color:var(--accent)}.next-lesson.is-locked .icon{color:var(--lock)}
+/* Module covers with progress rings; gentle motion. */
+.module-cover{position:relative;display:flex;align-items:center;gap:14px;min-height:118px;margin:0 0 12px;padding:16px 16px 16px 112px;border:1px solid var(--border);border-radius:20px;background:linear-gradient(135deg,var(--surface-2),var(--surface));overflow:hidden}
+.module-cover .tile-art{left:4px;right:auto;bottom:auto;top:50%;width:100px;height:100px;transform:translateY(-50%) rotate(-6deg)}
+.cover-text{flex:1;min-width:0}.cover-text .eyebrow{font-size:11px;letter-spacing:.1em;color:var(--soft);margin:0 0 4px;display:block}.cover-text h2{font-size:19px;line-height:1.2;margin:0 0 4px}.cover-text p{font-size:13px;line-height:1.4;color:var(--muted);margin:0 0 6px}
+.cover-lock{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--lock)}.cover-lock .icon{width:14px;height:14px}
+.ring{flex:none;width:52px;height:52px;border-radius:50%;display:grid;place-items:center}.ring>span{width:42px;height:42px;border-radius:50%;display:grid;place-items:center;background:var(--surface);font-size:12px;font-weight:700;color:var(--text)}
+.ring-0{background:conic-gradient(var(--accent) 0%,var(--track) 0)}.ring-10{background:conic-gradient(var(--accent) 10%,var(--track) 0)}.ring-20{background:conic-gradient(var(--accent) 20%,var(--track) 0)}.ring-30{background:conic-gradient(var(--accent) 30%,var(--track) 0)}.ring-40{background:conic-gradient(var(--accent) 40%,var(--track) 0)}.ring-50{background:conic-gradient(var(--accent) 50%,var(--track) 0)}.ring-60{background:conic-gradient(var(--accent) 60%,var(--track) 0)}.ring-70{background:conic-gradient(var(--accent) 70%,var(--track) 0)}.ring-80{background:conic-gradient(var(--accent) 80%,var(--track) 0)}.ring-90{background:conic-gradient(var(--accent) 90%,var(--track) 0)}.ring-100{background:conic-gradient(var(--accent) 100%,var(--track) 0)}
+.cover-2{background:linear-gradient(135deg,#123f2c,#0c2c1e)}.cover-3{background:linear-gradient(135deg,#17402a,#0b2a1c)}.cover-4{background:linear-gradient(135deg,#1b3f26,#0d2b1c)}
+@media (max-width:360px){.module-cover{padding-left:92px}.module-cover .tile-art{width:84px;height:84px}}
+.just-done .lesson-status{animation:pop .6s ease-out both}.just-done{animation:glow 1.6s ease-out}
+@keyframes glow{0%{box-shadow:0 0 0 0 #d1f79766}100%{box-shadow:0 0 0 14px #d1f79700}}
+@keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+#app>main,#app>section,#app>article,#app>#catalogue-results{animation:rise .28s ease-out both}
+.module-section .eyebrow{font-size:11px}
+@media (prefers-reduced-motion:reduce){.just-done,.just-done .lesson-status,#app>main,#app>section,#app>article,#app>#catalogue-results{animation:none}}
+/* Rule 7: nothing below 11 px. */
+.hero .eyebrow,.outcome p>span,.code-toolbar span,.profile-signature span{font-size:11px}
