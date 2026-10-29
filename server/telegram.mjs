@@ -78,9 +78,10 @@ export function pricesFor(store, promoPercent = 0, now = Date.now()) {
   const rub = Number(s.priceRub) > 0 ? s.priceRub : configuredRub();
   return { stars: step(stars, 0, 1), rub: step(rub, 0, 1), usdt: step(s.priceUsdt, 2, 0.01), regular: { stars, rub: rub || null, usdt: s.priceUsdt || null }, salePercent: sale, promoPercent };
 }
-export function applyPromo(store, code, base, now = Date.now()) {
+export function applyPromo(store, code, base, now = Date.now(), userId = null) {
   const promo = store.promo(code);
-  if (!promo || !promo.active) return { error: 'Промокод не найден или отключён' };
+  // A personal code from an automatic offer works only for the account it was sent to.
+  if (!promo || !promo.active || (promo.user_id && promo.user_id !== userId)) return { error: 'Промокод не найден или отключён' };
   if (promo.expires_at && Date.parse(promo.expires_at) <= now) return { error: 'Срок действия промокода закончился' };
   if (promo.max_uses && promo.used >= promo.max_uses) return { error: 'Промокод уже использован максимальное число раз' };
   return { code: promo.code, percent: promo.percent, priceStars: Math.max(1, Math.round(base * (100 - promo.percent) / 100)) };

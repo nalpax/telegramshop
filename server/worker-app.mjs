@@ -3,6 +3,7 @@
 import { createHmac } from 'node:crypto';
 import { makeApi } from './api.mjs';
 import { configureBot, handleUpdate, sendReminders, validateAppUrl } from './bot-core.mjs';
+import { sendOffers } from './offers.mjs';
 import { safeEqual } from './providers/index.mjs';
 import { channelsFor } from './telegram.mjs';
 import { MIME, SECURITY_HEADERS, body, errorStatus, json } from './http-common.mjs';
@@ -99,7 +100,12 @@ export function makeWorkerApp({ store, telegram, content, env = process.env, log
     } catch (error) { return reply(errorStatus(error), { error: 'Request could not be completed' }); }
   };
   // Called hourly by the Durable Object alarm (server/worker.mjs).
-  handle.reminders = (now = Date.now()) => (env.BOT_TOKEN && validateAppUrl(appUrl) ? sendReminders({ store, api: telegramApi, appUrl, titles: (content.lessons || []).map(l => l.title), now, log }) : Promise.resolve(0));
+  handle.reminders = async (now = Date.now()) => {
+    if (!env.BOT_TOKEN || !validateAppUrl(appUrl)) return 0;
+    const sent = await sendReminders({ store, api: telegramApi, appUrl, titles: (content.lessons || []).map(l => l.title), now, log });
+    await sendOffers({ store, api: telegramApi, appUrl, purchase: api.purchaseInfo, now, log }); // off unless enabled in the admin panel
+    return sent;
+  };
   return handle;
 }
 

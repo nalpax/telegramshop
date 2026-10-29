@@ -3,6 +3,7 @@ import { FREE_LESSONS, accessMode, applyPromo, channelsFor, isAdmin, normalizeCh
 import { makeProviders } from './providers/index.mjs';
 import { fingerprint } from './fingerprint.mjs';
 import { FREE_PRACTICE_LAUNCHES, HANDOVER, QUIZ, TRAINER_IDS } from './practice-data.mjs';
+import { MAX_OFFER_PERCENT, offerSettings } from './offers.mjs';
 // Course content is passed in by the host: server/content-node.mjs reads data/ for Node, the Cloudflare build bundles it.
 // Date of the current terms and privacy policy (public/terms.html, public/privacy.html). Change both when the texts change.
 const DOCUMENTS_DATE = '2026-10-29';
@@ -129,7 +130,7 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
       const get = request.method === 'GET';
       const bad = message => send(400, { error: message });
       const providerList = () => providers.list.map(p => ({ id: p.id, title: p.title, currency: p.currency, configured: p.configured(), enabled: !!store.providerState()[p.id], needsSandboxCheck: !!p.needsSandboxCheck, webhook: `${(process.env.APP_URL || '').replace(/\/$/, '')}/api/webhooks/${p.id}` }));
-      const overview = () => ({ ...store.settings(), current: offerFor(store), prices: pricesFor(store), methods: methodsFor(), providers: providerList(), channels: store.channels(), effectiveChannels: channelsFor(store), promos: store.promos(), stats: store.stats() });
+      const overview = () => ({ ...store.settings(), current: offerFor(store), prices: pricesFor(store), methods: methodsFor(), providers: providerList(), channels: store.channels(), effectiveChannels: channelsFor(store), promos: store.promos(), stats: store.stats() , autoOffers: { ...offerSettings(store), stats: store.offerStats(), paymentsReady: purchaseInfo().ready }});
       if (route === 'offer') {
         if (get) return send(200, { ...store.settings(), current: offerFor(store) });
         // Stars price is optional (Stars payment stays off without it); at least one price in some currency is required.
@@ -187,6 +188,13 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
         store.log(user.id, 'provider', `${provider.id} ${data.enabled === true ? 'on' : 'off'}`);
         return send(200, overview());
       }
+      if (route === 'auto-offers') {
+        const ladder = Array.isArray(data.ladder) ? data.ladder : [];
+        if (typeof data.enabled !== 'boolean' || !ladder.length || ladder.length > 3 || ladder.some(n => !Number.isInteger(n) || n < 5 || n > MAX_OFFER_PERCENT)) return bad(`Скидки: от 5 до ${MAX_OFFER_PERCENT}%, до трёх ступеней`);
+        store.saveOfferSettings({ enabled: data.enabled, ladder });
+        store.log(user.id, 'auto-offers', `${data.enabled ? 'on' : 'off'} ${ladder.join('/')}%`);
+        return send(200, overview());
+      }
       if (route === 'promos') {
         const code = String(data.code || '').trim().toUpperCase();
         if (data.remove === true) { store.deletePromo(code); store.log(user.id, 'promo-delete', code); return send(200, overview()); }
@@ -210,7 +218,7 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
     }
     const access = store.entitlement(user.id);
     const practice = () => ({ unlimited: !!access.active, limit: FREE_PRACTICE_LAUNCHES, remaining: Math.max(0, FREE_PRACTICE_LAUNCHES - store.practiceUsed(user.id)) });
-    if (url.pathname === '/api/session') return send(200, { user, subscribed, access, done: store.getProgress(user.id), isAdmin: isAdmin(user.id), practice: practice(), ...(subscriptionUnavailable ? { subscriptionUnavailable } : {}) });
+    if (url.pathname === '/api/session') return send(200, { user, subscribed, access, done: store.getProgress(user.id), isAdmin: isAdmin(user.id), practice: practice(), personalOffer: (({ code, percent, expires_at } = {}) => (code ? { code, percent, expiresAt: expires_at } : null))(store.activePersonalPromo(user.id) || undefined), ...(subscriptionUnavailable ? { subscriptionUnavailable } : {}) });
     if (!subscribed) return send(403, { error: 'Channel subscription required', reason: 'channel' });
     if (orderMatch) {
       const order = store.order(orderMatch[1]);
@@ -284,7 +292,7 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
     // ---- checkout ----
     let promoCode = null; let promoPercent = 0;
     if (url.pathname === '/api/promo' || (typeof data.promo === 'string' && data.promo.trim())) {
-      const result = applyPromo(store, data.promo, 100);
+      const result = applyPromo(store, data.promo, 100, Date.now(), user.id);
       if (result.error) return send(400, { error: result.error });
       promoCode = result.code; promoPercent = result.percent;
       if (url.pathname === '/api/promo') return send(200, { code: promoCode, percent: promoPercent, methods: methodsFor(promoPercent) });

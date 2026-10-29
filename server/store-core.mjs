@@ -16,7 +16,9 @@ export class StoreCore {
     // No PRAGMA here: Durable Objects do not allow every PRAGMA. An existing column is reported as "duplicate column".
     const addColumn = (table, column, ddl) => { try { this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`); } catch (error) { if (!/duplicate column/i.test(String(error?.message))) throw error; } };
     addColumn('orders', 'promo', 'TEXT'); addColumn('orders', 'provider', "TEXT NOT NULL DEFAULT 'stars'"); addColumn('orders', 'currency', 'TEXT'); addColumn('orders', 'amount', 'REAL');
-    addColumn('users', 'reminders_off', 'INTEGER NOT NULL DEFAULT 0'); addColumn('users', 'practice_used', 'INTEGER NOT NULL DEFAULT 0'); addColumn('users', 'reminded_at', 'INTEGER');
+    addColumn('users', 'reminders_off', 'INTEGER NOT NULL DEFAULT 0'); addColumn('users', 'practice_used', 'INTEGER NOT NULL DEFAULT 0');
+    addColumn('users', 'offers_off', 'INTEGER NOT NULL DEFAULT 0'); addColumn('users', 'offer_count', 'INTEGER NOT NULL DEFAULT 0'); addColumn('users', 'last_offer_at', 'INTEGER'); addColumn('users', 'after_free_at', 'INTEGER');
+    addColumn('promo_codes', 'user_id', 'INTEGER'); addColumn('promo_codes', 'nudged', 'INTEGER NOT NULL DEFAULT 0'); addColumn('users', 'reminded_at', 'INTEGER');
     addColumn('payments', 'provider', "TEXT NOT NULL DEFAULT 'stars'"); addColumn('payments', 'amount', 'REAL'); addColumn('payments', 'currency', 'TEXT');
     this.db.exec(`CREATE TABLE IF NOT EXISTS favorites (user_id INTEGER NOT NULL, prompt_id TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY(user_id, prompt_id));
       CREATE TABLE IF NOT EXISTS task_checks (user_id INTEGER NOT NULL, lesson_id INTEGER NOT NULL, item INTEGER NOT NULL, PRIMARY KEY(user_id, lesson_id, item));`);
@@ -69,6 +71,19 @@ export class StoreCore {
   markReminded(userId, now = Date.now()) { this.db.prepare('UPDATE users SET reminded_at=? WHERE id=?').run(now, userId); }
   setReminders(userId, on) { this.db.prepare('UPDATE users SET reminders_off=? WHERE id=?').run(on ? 0 : 1, userId); }
   remindersOn(userId) { return !this.db.prepare('SELECT reminders_off FROM users WHERE id=?').get(userId)?.reminders_off; }
+  // ---- automatic offers (server/offers.mjs) ----
+  offerSettings() { try { return JSON.parse(this.db.prepare("SELECT value FROM settings WHERE key='auto_offers'").get()?.value || '{}'); } catch { return {}; } }
+  saveOfferSettings(value) { this.db.prepare("INSERT INTO settings VALUES ('auto_offers',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify(value)); }
+  setOffers(userId, on) { this.db.prepare('UPDATE users SET offers_off=? WHERE id=?').run(on ? 0 : 1, userId); }
+  offersOn(userId) { return !this.db.prepare('SELECT offers_off FROM users WHERE id=?').get(userId)?.offers_off; }
+  offerCandidates() { return this.db.prepare(`SELECT id, first_seen, last_seen, offer_count, last_offer_at, after_free_at FROM users WHERE offers_off=0 AND id NOT IN (SELECT user_id FROM payments WHERE charge_id NOT IN (SELECT charge_id FROM refunds))`).all(); }
+  addPersonalPromo(code, percent, expiresAt, userId, now = Date.now()) { this.db.prepare('INSERT INTO promo_codes (code,percent,max_uses,expires_at,active,created_at,user_id) VALUES (?,?,1,?,1,?,?)').run(code, percent, expiresAt, now, userId); }
+  markOffered(userId, now) { this.db.prepare('UPDATE users SET offer_count = offer_count + 1, last_offer_at=? WHERE id=?').run(now, userId); }
+  markAfterFree(userId, now) { this.db.prepare('UPDATE users SET after_free_at=? WHERE id=?').run(now, userId); }
+  activePersonalPromo(userId, now = Date.now()) { return this.db.prepare('SELECT * FROM promo_codes WHERE user_id=? AND active=1 AND used=0 ORDER BY created_at DESC').all(userId).find(p => Date.parse(p.expires_at) > now) || null; }
+  promosToNudge() { return this.db.prepare('SELECT * FROM promo_codes WHERE user_id IS NOT NULL AND active=1 AND used=0 AND nudged=0').all(); }
+  markNudged(code) { this.db.prepare('UPDATE promo_codes SET nudged=1 WHERE code=?').run(code); }
+  offerStats() { const r = this.db.prepare('SELECT COUNT(*) AS sent, COALESCE(SUM(used),0) AS used FROM promo_codes WHERE user_id IS NOT NULL').get(); return { sent: r.sent, used: r.used }; }
   // ---- «Практикум» launches of a free account ----
   practiceUsed(userId) { return this.db.prepare('SELECT practice_used FROM users WHERE id=?').get(userId)?.practice_used || 0; }
   usePractice(userId) { this.db.prepare('UPDATE users SET practice_used = practice_used + 1 WHERE id=?').run(userId); }
@@ -136,7 +151,8 @@ export class StoreCore {
   // ---- channels, promo codes, audit ----
   channels() { try { const v = JSON.parse(this.db.prepare("SELECT value FROM settings WHERE key='channels'").get()?.value || '[]'); return Array.isArray(v) ? v : []; } catch { return []; } }
   saveChannels(list) { this.db.prepare("INSERT INTO settings VALUES ('channels',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify(list)); }
-  promos() { return this.db.prepare('SELECT * FROM promo_codes ORDER BY created_at DESC').all(); }
+  // General codes made in the admin panel; personal codes from automatic offers (user_id set) are listed separately.
+  promos() { return this.db.prepare('SELECT * FROM promo_codes WHERE user_id IS NULL ORDER BY created_at DESC').all(); }
   promo(code) { return this.db.prepare('SELECT * FROM promo_codes WHERE code=?').get(String(code || '').trim().toUpperCase()) || null; }
   savePromo({ code, percent, maxUses = null, expiresAt = null, active = 1 }) {
     this.db.prepare(`INSERT INTO promo_codes (code,percent,max_uses,expires_at,active,created_at) VALUES (?,?,?,?,?,?)
