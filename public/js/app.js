@@ -3,7 +3,7 @@ import { FREE_LESSONS, modules, lessons, materials } from './course.js';
 import { renderMarkdown } from './markdown.js';
 import { createAdmin, planBadge } from './admin.js';
 import { installProtection } from './protect.js';
-import { mountPractice, practiceList, practiceScreen } from './practice.js';
+import { mountPractice, practiceList, practicePaywall, practiceScreen, setPracticeData } from './practice.js';
 import { progress, saveProgress, complete, resetProgress, escape as e } from './state.js';
 
 const app = document.querySelector('#app');
@@ -19,6 +19,8 @@ let readerCodes = [];
 let catalogueTab = 'lessons';
 let promptCategory = 'all';
 let promptLimit = 30;
+// «Практикум» trainers allowed or refused by the server in this app session (see practiceView).
+const practiceStarted = new Set(); const practiceBlocked = new Set();
 // Favourite prompts and ticked checklist items live on the server (/api/marks); recently copied prompts are a per-device convenience.
 let marks = { favorites: [], tasks: {} };
 const RECENT_KEY = 'vibentry.recent.v1'; const SCROLL_KEY = 'vibentry.scroll.v1';
@@ -77,7 +79,7 @@ function home() {
   ${hero()}
   <section class="continue-card" aria-labelledby="continue-title"><div class="continue-top"><span class="eyebrow">${eyebrow}</span>${icon(freeDone ? 'check' : 'sparkle')}</div><h2 id="continue-title">${title}</h2><div class="progress-caption"><span>Пройдено ${progress.done.length} из 24 уроков</span><span>${percent}%</span></div><progress max="24" value="${progress.done.length}" aria-label="Прогресс курса"></progress>${freeDone ? `<a class="button button-primary" href="#next">${label}${icon('arrow')}</a>` : `<button class="button button-primary" data-action="lesson" data-id="${next.id}">${label}${icon('arrow')}</button>`}</section>
   <section class="quick-section" aria-labelledby="quick-title"><div class="section-heading"><h2 id="quick-title">Быстрый доступ</h2></div><div class="quick-grid">${tile('Уроки', `24 урока,<br>${FREE_LESSONS} бесплатно`, 'book', urlFor())}${tile('Промпты', '300 запросов<br>для ИИ', 'prompts', urlFor('prompts'))}${tile('База', 'Инструменты, ниши,<br>клиенты, заказы', 'files', urlFor('base'))}${tile(session?.access?.active ? 'Мой доступ' : 'Полный доступ', session?.access?.active ? 'Всё открыто,<br>навсегда' : priceLabel() ? `${priceLabel()}<br>навсегда` : 'Один платёж,<br>навсегда', 'plane', '#access', 'access')}</div></section>
-  <a class="practice-teaser" href="#practice"><span class="practice-glyph">${icon('play')}</span><span><strong>Практикум</strong><small>Конструктор промпта, квиз, калькулятор оценки и проверка перед сдачей</small></span>${icon('arrow')}</a>
+  <a class="practice-teaser" href="#practice"><span class="practice-glyph">${icon('play')}</span><span><strong>Практикум</strong><small>Конструктор промпта, квиз, калькулятор оценки и проверка перед сдачей${session?.practice && !session.practice.unlimited ? ` · бесплатно ${session.practice.remaining} из ${session.practice.limit} запусков` : ''}</small></span>${icon('arrow')}</a>
   <p class="home-note">Одна сделанная страница полезнее десяти прочитанных.</p>${nav('home')}`;
 }
 // Shown after the last free lesson: what the buyer gets next, the price, one clear button. No invented reviews or income.
@@ -86,7 +88,7 @@ function afterFree() {
   const next = modules.filter(m => m.start > FREE_LESSONS);
   const price = priceLabel();
   return `<header class="home-header">${brand()}</header><main class="after-free"><div class="after-badge">${icon('check')}</div><span class="eyebrow">МОДУЛЬ «${e(modules[0].title.toUpperCase())}» ПРОЙДЕН</span><h1>Первая страница готова<span>.</span></h1><p class="after-lead">Вы прошли ${done} из ${FREE_LESSONS} бесплатных уроков: от пустой папки до опубликованной страницы. Дальше — сайт, который можно показать клиенту, и первые заказы.</p>
-  <section class="after-plan" aria-label="Что дальше">${next.map(m => `<div class="after-module"><span class="after-range">${m.range}</span><div><strong>${e(m.title)}</strong><small>${e(m.description)} · ${m.end - m.start + 1} ${plural(m.end - m.start + 1, 'урок', 'урока', 'уроков')}</small></div></div>`).join('')}<div class="after-module"><span class="after-range">${icon('copy')}</span><div><strong>300 промптов</strong><small>Готовые запросы для каждого этапа: от брифа до сдачи проекта</small></div></div><div class="after-module"><span class="after-range">${icon('file')}</span><div><strong>База материалов</strong><small>Инструменты, ниши, поиск клиентов, оценка и правки</small></div></div></section>
+  <section class="after-plan" aria-label="Что дальше">${next.map(m => `<div class="after-module"><span class="after-range">${m.range}</span><div><strong>${e(m.title)}</strong><small>${e(m.description)} · ${m.end - m.start + 1} ${plural(m.end - m.start + 1, 'урок', 'урока', 'уроков')}</small></div></div>`).join('')}<div class="after-module"><span class="after-range">${icon('copy')}</span><div><strong>300 промптов</strong><small>Готовые запросы для каждого этапа: от брифа до сдачи проекта</small></div></div><div class="after-module"><span class="after-range">${icon('file')}</span><div><strong>База материалов</strong><small>Инструменты, ниши, поиск клиентов, оценка и правки</small></div></div><div class="after-module"><span class="after-range">${icon('play')}</span><div><strong>«Практикум» без ограничений</strong><small>Конструктор промпта, квиз, калькулятор оценки, проверка перед сдачей</small></div></div></section>
   <div class="after-price">${price ? `<strong>${e(price)}</strong><span>один раз · доступ навсегда · без подписки</span>` : '<span>Цена появится перед началом продаж</span>'}</div>
   <button class="button button-primary" data-action="access">${price ? `Открыть весь курс за ${e(price)}` : 'Подробнее о полном доступе'}${icon('arrow')}</button><a class="button button-secondary" href="${urlFor()}">Вернуться к урокам</a><p class="welcome-note">Курс учит навыкам, но не гарантирует заказов и дохода.</p></main>${nav('home')}`;
 }
@@ -242,7 +244,7 @@ function render() {
   closeModal(false);
   if (name === 'lesson') { try { tg?.BackButton.show(); } catch {} reader(Number(params.get('id')), epoch); }
   else if (name === 'article') { try { tg?.BackButton.show(); } catch {} articleReader(params.get('id') || '', epoch); }
-  else { try { tg?.BackButton.hide(); } catch {} app.innerHTML = name === 'materials' ? catalogue(params) : name === 'profile' ? profile() : name === 'admin' ? adminScreen() : name === 'practice' ? practiceView(params) : name === 'next' && !session?.access?.active ? afterFree() : home(); if (name === 'buy') openAccess(); if (name === 'practice') mountPractice(app, { copy }); }
+  else { try { tg?.BackButton.hide(); } catch {} app.innerHTML = name === 'materials' ? catalogue(params) : name === 'profile' ? profile() : name === 'admin' ? adminScreen() : name === 'practice' ? practiceView(params) : name === 'next' && !session?.access?.active ? afterFree() : home(); if (name === 'buy') openAccess(); if (name === 'practice' && practiceStarted.has(params.get('id'))) mountPractice(app, { copy }); }
   window.scrollTo({ top: 0, behavior: 'instant' });
 }
 function toast(message) { const box = document.querySelector('#toast'); box.textContent = message; box.classList.add('visible'); clearTimeout(toastTimer); toastTimer = setTimeout(() => box.classList.remove('visible'), 3000); }
@@ -273,7 +275,7 @@ function openAccess() {
   methods = []; selectedMethod = (config.methods || [])[0]?.id || 'stars';
   promoApplied = null;
   const active = session?.access?.active;
-  modal(active ? 'Ваш доступ открыт' : 'Тариф «Полный доступ»', `<p>${active ? 'Все уроки, промпты и материалы открыты в приложении. Доступ остаётся у вас навсегда.' : 'От первой страницы до портфолио, клиентов и сдачи проекта. Продолжите свой маршрут.'}</p><div class="access-benefits">${['Все 24 урока курса', '300 промптов и рабочие шаблоны', 'База: инструменты, ниши, клиенты, заказы', 'Прогресс в вашем Telegram'].map(t => `<div>${icon('check')}<span>${t}</span></div>`).join('')}</div>${active ? `<p>${session.access.expiresAt ? 'Оплачен до ' + new Date(session.access.expiresAt * 1000).toLocaleDateString('ru-RU') : 'Разовая покупка · без ограничения срока'}</p><a class="button button-primary" href="#materials">К урокам${icon('arrow')}</a>` : `<div id="pay-area">${payArea()}</div><p class="modal-note">Оплата через Telegram Stars, карту, СБП или криптовалюту. Курс не гарантирует заказы и доход. Оплачивая, вы принимаете <a href="${location.origin}/terms.html" data-external>пользовательское соглашение</a> и <a href="${location.origin}/privacy.html" data-external>политику конфиденциальности</a>.</p>`}<button class="text-link support-link" data-action="support">Вопросы об оплате</button>`);
+  modal(active ? 'Ваш доступ открыт' : 'Тариф «Полный доступ»', `<p>${active ? 'Все уроки, промпты и материалы открыты в приложении. Доступ остаётся у вас навсегда.' : 'От первой страницы до портфолио, клиентов и сдачи проекта. Продолжите свой маршрут.'}</p><div class="access-benefits">${['Все 24 урока курса', '300 промптов и рабочие шаблоны', 'База: инструменты, ниши, клиенты, заказы', '«Практикум» без ограничений', 'Прогресс в вашем Telegram'].map(t => `<div>${icon('check')}<span>${t}</span></div>`).join('')}</div>${active ? `<p>${session.access.expiresAt ? 'Оплачен до ' + new Date(session.access.expiresAt * 1000).toLocaleDateString('ru-RU') : 'Разовая покупка · без ограничения срока'}</p><a class="button button-primary" href="#materials">К урокам${icon('arrow')}</a>` : `<div id="pay-area">${payArea()}</div><p class="modal-note">Оплата через Telegram Stars, карту, СБП или криптовалюту. Курс не гарантирует заказы и доход. Оплачивая, вы принимаете <a href="${location.origin}/terms.html" data-external>пользовательское соглашение</a> и <a href="${location.origin}/privacy.html" data-external>политику конфиденциальности</a>.</p>`}<button class="text-link support-link" data-action="support">Вопросы об оплате</button>`);
 }
 async function copy(text) {
   try { await navigator.clipboard.writeText(text); toast('Скопировано. Подставьте свои данные вместо скобок.'); }
@@ -432,6 +434,7 @@ const protection = installProtection(() => session?.user || null);
 const admin = createAdmin({ sendApi, getApi, toast, modal, closeModal, config: { get regularPriceStars() { return config.regularPriceStars; } }, refreshConfig, getSession: () => session });
 async function refreshSession() {
   const data = await sendApi('/api/session'); session = data; protection.refresh();
+  if (data.practice?.unlimited) practiceBlocked.clear();
   if (!config.preview) { progress.done = data.done || []; progress.last = Math.min(24, (progress.done.at(-1) || 0) + 1); }
   await loadMarks();
   return data;
@@ -512,7 +515,27 @@ async function pay(button) {
     });
   } catch (error) { toast(error.status === 429 ? 'Подождите несколько секунд и попробуйте снова.' : 'Счёт пока недоступен. Попробуйте другой способ или напишите автору.'); if (button.isConnected) { button.disabled = false; button.textContent = 'Повторить оплату'; } }
 }
-function practiceView(params) { const id = params.get('id'); return `${id ? practiceScreen(id) : practiceList()}${nav('practice')}`; }
+// A trainer opens only after the server allows the launch (free accounts: 3 in total); a launch counts once per app session.
+function practiceView(params) {
+  const id = params.get('id');
+  if (!id) return `${practiceList(session?.practice)}${nav('practice')}`;
+  if (practiceStarted.has(id)) return `${practiceScreen(id)}${nav('practice')}`;
+  if (practiceBlocked.has(id) || (session?.practice && !session.practice.unlimited && session.practice.remaining <= 0)) return `${practicePaywall(id, priceLabel())}${nav('practice')}`;
+  startPractice(id, renderEpoch);
+  return `<header class="reader-header"><a href="#practice" class="back-link">${icon('back')}Практикум</a></header><div class="loading" role="status">Открываем тренажёр<span></span></div>${nav('practice')}`;
+}
+async function startPractice(id, epoch) {
+  try {
+    const result = await sendApi('/api/practice', { id });
+    setPracticeData(result.data); practiceStarted.add(id);
+    if (session) session.practice = { unlimited: result.unlimited, limit: result.limit, remaining: result.remaining };
+    if (!result.unlimited) toast(result.remaining ? `Бесплатный запуск. Осталось ${result.remaining} из ${result.limit}.` : 'Это был последний бесплатный запуск «Практикума».');
+  } catch (error) {
+    if (error.status === 403) { practiceBlocked.add(id); if (session?.practice) session.practice.remaining = 0; }
+    else if (epoch === renderEpoch) { app.innerHTML = `<header class="reader-header"><a href="#practice" class="back-link">${icon('back')}Практикум</a></header>${errorPanel()}${nav('practice')}`; return; }
+  }
+  if (route().name === 'practice' && route().params.get('id') === id) render();
+}
 function adminScreen() {
   if (!session?.isAdmin) return `<div class="empty-state"><h1>Доступ ограничен</h1><p>Этот раздел доступен только владельцу проекта.</p><a class="button button-secondary" href="#profile">В профиль</a></div>${nav('profile')}`;
   return `<header class="reader-header"><a href="#profile" class="back-link">${icon('back')}В профиль</a>${brand(true)}</header>${admin.screen()}${nav('admin')}`;

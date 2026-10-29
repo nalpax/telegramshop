@@ -1,9 +1,12 @@
-// «Практикум»: interactive trainers next to the course. Free for subscribers, so everything here is public code and
-// contains no paid course text. Examples are labelled as educational. Progress is a per-device convenience (localStorage).
+// «Практикум»: interactive trainers next to the course. Paid: Pro has no limit, a free account gets 3 launches, counted on
+// the server (/api/practice), which also sends the quiz and checklist content only for an allowed launch.
+// Examples are labelled as educational. Progress inside a trainer is a per-device convenience (localStorage).
 import { icon } from './icons.js';
 import { escape as e } from './state.js';
 
 const KEY = 'vibentry.practice.v1';
+let QUIZ = []; let HANDOVER = [];
+export function setPracticeData(data = {}) { if (data.quiz) QUIZ = data.quiz; if (data.handover) HANDOVER = data.handover; }
 const load = () => { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch { return {}; } };
 const save = state => { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch {} };
 const update = (id, patch) => { const state = load(); state[id] = { ...state[id], ...patch }; save(state); };
@@ -15,11 +18,18 @@ export const trainers = [
   { id: 'handover', title: 'Проверка перед сдачей', description: 'Пройдите сайт по списку, прежде чем отправить ссылку клиенту', minutes: '15 мин', glyph: 'check' },
 ];
 
-export function practiceList() {
-  const state = load();
+// limits: { unlimited, limit, remaining } from the server (session.practice).
+export function practiceList(limits) {
+  const state = load(); const free = limits && !limits.unlimited; const out = free && limits.remaining <= 0;
+  const banner = !free ? '' : `<button class="practice-limit ${out ? 'is-out' : ''}" data-action="access">${icon(out ? 'lock' : 'sparkle')}<span><strong>${out ? 'Бесплатные запуски закончились' : `Бесплатно: осталось ${limits.remaining} из ${limits.limit} запусков`}</strong><small>С полным доступом «Практикум» без ограничений</small></span>${icon('arrow')}</button>`;
   return `<header class="page-header"><div><h1>Практикум</h1><p>Тренажёры, чтобы закрепить навык на деле</p></div></header>
-  <p class="practice-intro">Это не уроки курса, а инструменты: соберите промпт, проверьте себя, посчитайте проект. Пользуйтесь сколько угодно.</p>
-  <div class="practice-grid">${trainers.map(t => `<a class="practice-card" href="#practice?id=${t.id}"><span class="practice-glyph">${icon(t.glyph)}</span><span class="practice-info"><strong>${t.title}</strong><small>${t.description}</small><span class="practice-meta">${t.minutes}${state[t.id]?.done ? ` · ${icon('check')}пройдено` : ''}</span></span>${icon('chevron')}</a>`).join('')}</div>`;
+  <p class="practice-intro">Это не уроки курса, а инструменты: соберите промпт, проверьте себя, посчитайте проект.</p>${banner}
+  <div class="practice-grid">${trainers.map(t => `<a class="practice-card ${out ? 'is-locked' : ''}" href="#practice?id=${t.id}"><span class="practice-glyph">${icon(t.glyph)}</span><span class="practice-info"><strong>${t.title}</strong><small>${t.description}</small><span class="practice-meta">${t.minutes}${state[t.id]?.done ? ` · ${icon('check')}пройдено` : ''}</span></span>${icon(out ? 'lock' : 'chevron')}</a>`).join('')}</div>`;
+}
+// Shown instead of a trainer when a free account has used its launches.
+export function practicePaywall(id, price) {
+  const t = trainers.find(x => x.id === id);
+  return `<header class="reader-header"><a href="#practice" class="back-link">${icon('back')}Практикум</a></header><section class="practice-panel practice-paywall"><span class="practice-glyph">${icon('lock')}</span><h2>${t ? e(t.title) : 'Практикум'}</h2><p>Бесплатные запуски «Практикума» закончились. С тарифом «Полный доступ» тренажёры открыты без ограничений — вместе со всеми уроками, промптами и базой.</p><div class="after-price">${price ? `<strong>${e(price)}</strong><span>один раз · доступ навсегда · без подписки</span>` : ''}</div><button class="button button-primary" data-action="access">${price ? `Оплатить ${e(price)}` : 'Подробнее о полном доступе'}${icon('arrow')}</button></section>`;
 }
 
 // ---------- 1. Prompt builder ----------
@@ -71,15 +81,6 @@ function paintBuilder(root) {
 }
 
 // ---------- 2. Quiz ----------
-export const QUIZ = [
-  { prompt: 'Сделай красивый сайт для кофейни.', options: ['Нет цели и содержания: что должен сделать посетитель, какие блоки нужны', 'Слишком короткое слово «кофейня»', 'Не указан язык программирования'], right: 0, why: '«Красивый» ничего не говорит модели. Опишите, для кого сайт, какое действие нужно посетителю и из каких блоков состоит страница.' },
-  { prompt: 'Сделай лендинг для мастера маникюра. Добавь отзывы довольных клиентов и напиши, что мастер обслужил 500 человек.', options: ['Нужно больше отзывов', 'Модель выдумает отзывы и цифры — это обман посетителей', 'Слово «лендинг» лучше заменить на «сайт»'], right: 1, why: 'Отзывы и цифры должны быть настоящими. Попросите заглушки в [квадратных скобках] и подставьте реальные данные заказчика.' },
-  { prompt: 'Исправь сайт, он плохо выглядит.', options: ['Не сказано, что именно, где и на каком экране плохо', 'Нужно писать вежливее', 'Нужно приложить весь код ещё раз'], right: 0, why: 'Опишите конкретно: «на телефоне шириной 375 px кнопка налезает на текст в блоке цен». Ещё лучше — приложите скриншот.' },
-  { prompt: 'Сделай сайт-визитку. Используй React, Next.js, Tailwind, базу данных и личный кабинет.', options: ['Не хватает ещё фреймворков', 'Для визитки это лишняя сложность: её проще поддерживать как один HTML-файл', 'Нужно указать версию React'], right: 1, why: 'Начинайте с самого простого решения, которое закрывает задачу. Сложный стек без причины — больше ошибок и сложнее сдать проект.' },
-  { prompt: 'Перепиши весь сайт заново, но сделай кнопку в шапке зелёной.', options: ['Всё верно, так надёжнее', 'Ради мелкой правки модель перепишет всё и может сломать работающее', 'Нужно указать оттенок зелёного в HEX'], right: 1, why: 'Просите точечную правку: «Измени только цвет кнопки в шапке на зелёный, остальной код не трогай». И проверяйте результат.' },
-  { prompt: 'Сделай форму заявки на сайте.', options: ['Не сказано, куда приходят заявки, какие поля обязательны и что видит человек после отправки', 'Форма на сайте не нужна', 'Нужно попросить три формы сразу'], right: 0, why: 'У формы есть путь: поля → проверка → отправка → письмо или сообщение → «Спасибо, мы свяжемся». Опишите каждый шаг и потом проверьте доставку.' },
-  { prompt: 'Вот мой пароль от хостинга: [пароль]. Опубликуй сайт сам.', options: ['Пароль лучше прислать в отдельном сообщении', 'Пароли и ключи нельзя отправлять в чат с моделью — публикуйте сами по шагам', 'Нужно добавить логин'], right: 1, why: 'Попросите пошаговую инструкцию и выполните её сами. Секреты храните у себя, а не в переписке.' },
-];
 function quizView() {
   const s = load().quiz || {}; const i = Math.min(s.index || 0, QUIZ.length);
   if (i >= QUIZ.length) return `<section class="practice-panel"><h2>Найдите слабое место</h2><div class="p-score"><strong>${s.score || 0} из ${QUIZ.length}</strong><p>${(s.score || 0) >= 6 ? 'Отлично: вы видите, что мешает модели понять задачу.' : 'Хороший повод вернуться к урокам 03 и 06 — там разобрано, из чего состоит понятная задача.'}</p></div><button class="button button-secondary" data-p="quiz-restart">Пройти ещё раз</button></section>`;
@@ -117,13 +118,6 @@ function paintEstimate(root) {
 }
 
 // ---------- 4. Handover checklist ----------
-const HANDOVER = [
-  ['Телефон', ['Страница без горизонтальной прокрутки на ширине 320 px', 'Кнопки и ссылки легко нажать пальцем', 'Текст читается без увеличения']],
-  ['Содержание', ['Нет «рыбы» и [заглушек] — только данные заказчика', 'Телефоны, адреса и ссылки на мессенджеры верные', 'Нет выдуманных отзывов, цифр и обещаний']],
-  ['Форма и ссылки', ['Тестовая заявка дошла туда, куда нужно заказчику', 'После отправки человек видит понятное сообщение', 'Все ссылки и кнопки ведут куда надо, битых нет']],
-  ['Публикация', ['Сайт открывается по домену заказчика с https', 'Есть название страницы, описание и значок вкладки', 'Страница открывается быстро и на мобильном интернете']],
-  ['Передача', ['Доступы к хостингу и домену оформлены на заказчика', 'Заказчик получил короткую инструкцию: что и где менять', 'Договорились, как и сколько стоят правки после сдачи']],
-];
 function handoverView() {
   const done = new Set(load().handover?.checked || []); let n = 0; const total = HANDOVER.reduce((s, [, items]) => s + items.length, 0);
   return `<section class="practice-panel" id="handover"><h2>Проверка перед сдачей</h2><p class="practice-intro">Пройдите сайт по пунктам. Всё, что не отмечено, — повод проверить ещё раз, прежде чем отправлять ссылку.</p><div class="p-step"><span id="handover-count">${done.size} из ${total}</span><progress id="handover-bar" max="${total}" value="${done.size}"></progress></div>

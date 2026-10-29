@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { QUIZ, builderPrompt, estimateText, trainers } from '../public/js/practice.js';
+import { builderPrompt, estimateText, trainers } from '../public/js/practice.js';
+import { QUIZ, HANDOVER } from '../server/practice-data.mjs';
 
 test('Practicum: builder makes a complete prompt and never asks the model to invent reviews or numbers', () => {
   const full = builderPrompt({ type: 'service', goal: 'lead', style: 'calm', about: 'ремонт ванных комнат', audience: 'владельцы квартир в городе', blocks: ['hero', 'services', 'prices', 'contacts'] });
@@ -19,4 +20,5 @@ test('Practicum: every quiz question has a valid answer and an explanation; four
   assert.equal(QUIZ.length, 7);
   for (const q of QUIZ) { assert.ok(q.right >= 0 && q.right < q.options.length); assert.ok(q.why.length > 30); }
   assert.deepEqual(trainers.map(t => t.id), ['builder', 'quiz', 'estimate', 'handover']);
+  assert.equal(HANDOVER.flatMap(([, items]) => items).length, 15);
 });

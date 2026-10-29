@@ -16,7 +16,7 @@ export class StoreCore {
     // No PRAGMA here: Durable Objects do not allow every PRAGMA. An existing column is reported as "duplicate column".
     const addColumn = (table, column, ddl) => { try { this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`); } catch (error) { if (!/duplicate column/i.test(String(error?.message))) throw error; } };
     addColumn('orders', 'promo', 'TEXT'); addColumn('orders', 'provider', "TEXT NOT NULL DEFAULT 'stars'"); addColumn('orders', 'currency', 'TEXT'); addColumn('orders', 'amount', 'REAL');
-    addColumn('users', 'reminders_off', 'INTEGER NOT NULL DEFAULT 0'); addColumn('users', 'reminded_at', 'INTEGER');
+    addColumn('users', 'reminders_off', 'INTEGER NOT NULL DEFAULT 0'); addColumn('users', 'practice_used', 'INTEGER NOT NULL DEFAULT 0'); addColumn('users', 'reminded_at', 'INTEGER');
     addColumn('payments', 'provider', "TEXT NOT NULL DEFAULT 'stars'"); addColumn('payments', 'amount', 'REAL'); addColumn('payments', 'currency', 'TEXT');
     this.db.exec(`CREATE TABLE IF NOT EXISTS favorites (user_id INTEGER NOT NULL, prompt_id TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY(user_id, prompt_id));
       CREATE TABLE IF NOT EXISTS task_checks (user_id INTEGER NOT NULL, lesson_id INTEGER NOT NULL, item INTEGER NOT NULL, PRIMARY KEY(user_id, lesson_id, item));`);
@@ -69,6 +69,9 @@ export class StoreCore {
   markReminded(userId, now = Date.now()) { this.db.prepare('UPDATE users SET reminded_at=? WHERE id=?').run(now, userId); }
   setReminders(userId, on) { this.db.prepare('UPDATE users SET reminders_off=? WHERE id=?').run(on ? 0 : 1, userId); }
   remindersOn(userId) { return !this.db.prepare('SELECT reminders_off FROM users WHERE id=?').get(userId)?.reminders_off; }
+  // ---- «Практикум» launches of a free account ----
+  practiceUsed(userId) { return this.db.prepare('SELECT practice_used FROM users WHERE id=?').get(userId)?.practice_used || 0; }
+  usePractice(userId) { this.db.prepare('UPDATE users SET practice_used = practice_used + 1 WHERE id=?').run(userId); }
   // ---- favourite prompts and ticked checklist items in lessons ----
   marks(userId) {
     const favorites = this.db.prepare('SELECT prompt_id FROM favorites WHERE user_id=? ORDER BY prompt_id').all(userId).map(r => r.prompt_id);

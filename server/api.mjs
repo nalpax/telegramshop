@@ -2,6 +2,7 @@ import { validateInitData } from './auth.mjs';
 import { FREE_LESSONS, accessMode, applyPromo, channelsFor, isAdmin, normalizeChannel, offerFor, pricesFor } from './telegram.mjs';
 import { makeProviders } from './providers/index.mjs';
 import { fingerprint } from './fingerprint.mjs';
+import { FREE_PRACTICE_LAUNCHES, HANDOVER, QUIZ, TRAINER_IDS } from './practice-data.mjs';
 // Course content is passed in by the host: server/content-node.mjs reads data/ for Node, the Cloudflare build bundles it.
 // Date of the current terms and privacy policy (public/terms.html, public/privacy.html). Change both when the texts change.
 const DOCUMENTS_DATE = '2026-10-29';
@@ -106,7 +107,7 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
     const articleMatch = url.pathname.match(/^\/api\/articles\/([a-z0-9-]+)$/);
     const listRoute = ['/api/prompts', '/api/articles', '/api/marks'].includes(url.pathname);
     const orderMatch = url.pathname.match(/^\/api\/order\/([0-9a-f-]{36})$/);
-    const acceptedPost = (['/api/session', '/api/progress', '/api/invoice', '/api/promo', '/api/marks'].includes(url.pathname) || url.pathname.startsWith('/api/admin/')) && request.method === 'POST';
+    const acceptedPost = (['/api/session', '/api/progress', '/api/invoice', '/api/promo', '/api/marks', '/api/practice'].includes(url.pathname) || url.pathname.startsWith('/api/admin/')) && request.method === 'POST';
     if (!acceptedPost && !((lessonMatch || resourceMatch || promptMatch || articleMatch || listRoute || adminRoute || orderMatch) && request.method === 'GET')) return send(404, { error: 'Unknown API endpoint' });
     if (preview && url.pathname === '/api/session') return send(200, { preview: true, user: null, subscribed: false, access: { active: false }, done: [] });
     const data = acceptedPost ? await body(request) : {};
@@ -197,7 +198,7 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
       }
       return send(404, { error: 'Unknown API endpoint' });
     }
-    if (url.pathname === '/api/session') store.upsertUser(user);
+    if (url.pathname === '/api/session' || url.pathname === '/api/practice') store.upsertUser(user);
     let subscribed;
     let subscriptionUnavailable = false;
     try { subscribed = await subscribedUser(user.id, url.pathname === '/api/session'); }
@@ -208,7 +209,8 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
       subscribed = false; subscriptionUnavailable = true;
     }
     const access = store.entitlement(user.id);
-    if (url.pathname === '/api/session') return send(200, { user, subscribed, access, done: store.getProgress(user.id), isAdmin: isAdmin(user.id), ...(subscriptionUnavailable ? { subscriptionUnavailable } : {}) });
+    const practice = () => ({ unlimited: !!access.active, limit: FREE_PRACTICE_LAUNCHES, remaining: Math.max(0, FREE_PRACTICE_LAUNCHES - store.practiceUsed(user.id)) });
+    if (url.pathname === '/api/session') return send(200, { user, subscribed, access, done: store.getProgress(user.id), isAdmin: isAdmin(user.id), practice: practice(), ...(subscriptionUnavailable ? { subscriptionUnavailable } : {}) });
     if (!subscribed) return send(403, { error: 'Channel subscription required', reason: 'channel' });
     if (orderMatch) {
       const order = store.order(orderMatch[1]);
@@ -224,6 +226,12 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
     }
     if (url.pathname === '/api/prompts') return send(200, promptList());
     if (url.pathname === '/api/articles') return send(200, articleList());
+    // «Практикум»: Pro has no limit; a free account gets FREE_PRACTICE_LAUNCHES launches. Quiz and checklist content only after an allowed launch.
+    if (url.pathname === '/api/practice') {
+      if (!TRAINER_IDS.includes(data.id)) return send(400, { error: 'Unknown trainer' });
+      if (!access.active) { if (store.practiceUsed(user.id) >= FREE_PRACTICE_LAUNCHES) return send(403, { error: 'Purchase required', reason: 'payment', ...practice() }); store.usePractice(user.id); }
+      return send(200, { ...practice(), data: data.id === 'quiz' ? { quiz: QUIZ } : data.id === 'handover' ? { handover: HANDOVER } : {} });
+    }
     if (url.pathname === '/api/marks') {
       if (request.method === 'GET') return send(200, store.marks(user.id));
       if (data.favorite) {
