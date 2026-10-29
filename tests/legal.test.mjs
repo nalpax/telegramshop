@@ -53,3 +53,21 @@ test('Document pages open in a browser and link to each other', async () => {
     for (const word of ['Telegram ID', 'Cloudflare', 'Platega', 'метк', 'localStorage']) assert.ok(privacy.includes(word), word);
   } finally { await t.done(); }
 });
+test('Rubles: PRICE_RUB is the starting price; the admin can change it without a Stars price; the sale applies to rubles', async () => {
+  const { createHmac } = await import('node:crypto');
+  const TOKEN = 'synthetic-test-token-not-a-credential';
+  const initData = id => { const d = new URLSearchParams({ auth_date: String(Math.floor(Date.now() / 1000)), user: JSON.stringify({ id, first_name: 'Админ' }), query_id: 't' }); const c = [...d].sort(([a], [b]) => a < b ? -1 : 1).map(([k, v]) => `${k}=${v}`).join('\n'); d.set('hash', createHmac('sha256', createHmac('sha256', 'WebAppData').update(TOKEN).digest()).update(c).digest('hex')); return d.toString(); };
+  const t = await setup({ BOT_TOKEN: TOKEN, PRICE_RUB: '1299', ADMIN_IDS: '1' });
+  const legal = async () => (await (await fetch(t.base + '/api/legal')).json()).prices;
+  const offer = body => fetch(t.base + '/api/admin/offer', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ initData: initData(1), ...body }) });
+  try {
+    assert.equal((await legal()).rub, 1299); assert.equal((await legal()).stars, null);
+    assert.equal((await offer({ priceStars: null, priceRub: 1499, discountPercent: 10 })).status, 200);
+    const p = await legal(); assert.equal(p.rub, 1349); assert.equal(p.regular.rub, 1499); assert.equal(p.salePercent, 10); assert.equal(p.stars, null);
+    assert.equal((await offer({ priceStars: null, priceRub: null, discountPercent: 0 })).status, 400, 'at least one price');
+    assert.equal((await offer({ priceStars: 0, priceRub: 1299, discountPercent: 0 })).status, 400, 'a Stars price, if given, is a positive integer');
+    assert.equal((await offer({ priceStars: 700, priceRub: 1299, discountPercent: 0 })).status, 200);
+    assert.deepEqual([(await legal()).rub, (await legal()).stars], [1299, 700]);
+    const fresh = await setup({ PRICE_RUB: 'abc' }); try { assert.equal((await (await fetch(fresh.base + '/api/legal')).json()).prices.rub, null); } finally { await fresh.done(); }
+  } finally { await t.done(); }
+});

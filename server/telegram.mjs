@@ -47,6 +47,11 @@ export function configuredPrice() {
   const value = process.env.PRICE_STARS || '';
   return /^[1-9]\d{0,5}$/.test(value) ? Number(value) : null;
 }
+// Starting price in rubles (PRICE_RUB). A price saved in the admin panel always wins.
+export function configuredRub() {
+  const value = process.env.PRICE_RUB || '';
+  return /^[1-9]\d{0,6}$/.test(value) ? Number(value) : null;
+}
 // Lessons 01–05 (module «Первый сайт») open after the channel subscription; the rest, prompts and the base need the purchase.
 // public/js/course.js marks the same lessons as free (a test keeps them in sync); the server is what enforces it.
 export const FREE_LESSONS = 5;
@@ -55,7 +60,8 @@ export function isAdmin(id) { return (process.env.ADMIN_IDS || '').split(',').ma
 export function offerFor(store, now = Date.now()) {
   const value = store.settings();
   const base = Number.isInteger(value.priceStars) ? value.priceStars : configuredPrice();
-  const onSale = !!(base && value.discountPercent > 0 && (!value.saleEndsAt || Date.parse(value.saleEndsAt) > now));
+  const anyPrice = base || Number(value.priceRub) > 0 || Number(value.priceUsdt) > 0 || configuredRub();
+  const onSale = !!(anyPrice && value.discountPercent > 0 && (!value.saleEndsAt || Date.parse(value.saleEndsAt) > now));
   return { priceStars: base ? (onSale ? Math.max(1, Math.round(base * (100 - value.discountPercent) / 100)) : base) : null, regularPriceStars: base, discountPercent: onSale ? value.discountPercent : 0, saleEndsAt: onSale ? value.saleEndsAt || null : null };
 }
 // Prices in every currency the shop sells in. Sale first, then promo; each step is rounded like the buyer would see it.
@@ -67,7 +73,8 @@ export function pricesFor(store, promoPercent = 0, now = Date.now()) {
     return cut(cut(Number(base), sale), promoPercent);
   };
   const stars = Number.isInteger(s.priceStars) ? s.priceStars : configuredPrice();
-  return { stars: step(stars, 0, 1), rub: step(s.priceRub, 0, 1), usdt: step(s.priceUsdt, 2, 0.01), regular: { stars, rub: s.priceRub || null, usdt: s.priceUsdt || null }, salePercent: sale, promoPercent };
+  const rub = Number(s.priceRub) > 0 ? s.priceRub : configuredRub();
+  return { stars: step(stars, 0, 1), rub: step(rub, 0, 1), usdt: step(s.priceUsdt, 2, 0.01), regular: { stars, rub: rub || null, usdt: s.priceUsdt || null }, salePercent: sale, promoPercent };
 }
 export function applyPromo(store, code, base, now = Date.now()) {
   const promo = store.promo(code);

@@ -129,12 +129,15 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
       const overview = () => ({ ...store.settings(), current: offerFor(store), prices: pricesFor(store), methods: methodsFor(), providers: providerList(), channels: store.channels(), effectiveChannels: channelsFor(store), promos: store.promos(), stats: store.stats() });
       if (route === 'offer') {
         if (get) return send(200, { ...store.settings(), current: offerFor(store) });
-        if (!Number.isInteger(data.priceStars) || data.priceStars < 1 || data.priceStars > 999999 || !Number.isInteger(data.discountPercent) || data.discountPercent < 0 || data.discountPercent > 90 || (data.saleEndsAt && (!Number.isFinite(Date.parse(data.saleEndsAt)) || Date.parse(data.saleEndsAt) <= Date.now()))) return bad('Invalid price or sale parameters');
+        // Stars price is optional (Stars payment stays off without it); at least one price in some currency is required.
+        const stars = data.priceStars === null || data.priceStars === undefined || data.priceStars === '' ? null : data.priceStars;
+        if ((stars !== null && (!Number.isInteger(stars) || stars < 1 || stars > 999999)) || !Number.isInteger(data.discountPercent) || data.discountPercent < 0 || data.discountPercent > 90 || (data.saleEndsAt && (!Number.isFinite(Date.parse(data.saleEndsAt)) || Date.parse(data.saleEndsAt) <= Date.now()))) return bad('Invalid price or sale parameters');
         const optional = (value, min, max) => value === undefined || value === null || value === '' ? null : (Number.isFinite(Number(value)) && Number(value) >= min && Number(value) <= max ? Math.round(Number(value) * 100) / 100 : NaN);
         const priceRub = optional(data.priceRub, 1, 9999999); const priceUsdt = optional(data.priceUsdt, 0.01, 99999);
         if (Number.isNaN(priceRub) || Number.isNaN(priceUsdt)) return bad('Invalid price or sale parameters');
-        store.saveSettings({ priceStars: data.priceStars, priceRub, priceUsdt, discountPercent: data.discountPercent, saleEndsAt: data.saleEndsAt || null });
-        store.log(user.id, 'offer', `${data.priceStars}⭐ −${data.discountPercent}%`);
+        if (stars === null && priceRub === null && priceUsdt === null) return bad('Укажите цену хотя бы в одной валюте');
+        store.saveSettings({ priceStars: stars, priceRub, priceUsdt, discountPercent: data.discountPercent, saleEndsAt: data.saleEndsAt || null });
+        store.log(user.id, 'offer', [stars && `${stars}⭐`, priceRub && `${priceRub}₽`, priceUsdt && `${priceUsdt} USDT`].filter(Boolean).join(' / ') + ` −${data.discountPercent}%`);
         return send(200, { ...store.settings(), current: offerFor(store) });
       }
       if (route === 'overview' && get) return send(200, overview());
@@ -176,7 +179,7 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
       if (route === 'providers') {
         const provider = providers.get(String(data.id || ''));
         if (!provider) return bad('Unknown provider');
-        if (data.enabled === true && !provider.configured()) return bad('Сначала добавьте ключи этого провайдера в .env на сервере и перезапустите его');
+        if (data.enabled === true && !provider.configured()) return bad('Сначала добавьте ключи этого провайдера в настройки сервера (.env или Secrets в Cloudflare)');
         store.saveProviderState({ ...store.providerState(), [provider.id]: data.enabled === true });
         store.log(user.id, 'provider', `${provider.id} ${data.enabled === true ? 'on' : 'off'}`);
         return send(200, overview());

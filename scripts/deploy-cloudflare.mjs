@@ -4,7 +4,7 @@
 // What it uploads: the worker modules reachable from server/worker.mjs, a content module built in memory from data/
 // (never written to disk; it lives only inside the deployed script and is not served), and public/ embedded as data modules
 // (served by the worker itself; fits the free plan's 3 MB script limit and needs no separate asset upload).
-// It sets APP_URL and NODE_ENV only. BOT_TOKEN (secret), ADMIN_IDS and the other settings are managed in the Cloudflare
+// It sets APP_URL and NODE_ENV, and PRICE_RUB (starting price) when given: PRICE_RUB=1299 npm run deploy:cloudflare. BOT_TOKEN (secret), ADMIN_IDS and the other settings are managed in the Cloudflare
 // dashboard (Worker → Settings → Variables and Secrets) and are kept across deploys. Nothing secret is printed.
 import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
@@ -70,7 +70,7 @@ const existing = (await cf(`${base}/scripts`)).find(s => s.id === name);
 // 1. The script. The Durable Object class gets SQLite storage on the first deploy (migration v1).
 const metadata = {
   main_module: 'server/worker.mjs', compatibility_date: COMPATIBILITY_DATE, compatibility_flags: ['nodejs_compat'],
-  bindings: [{ type: 'durable_object_namespace', name: 'APP', class_name: CLASS }, { type: 'plain_text', name: 'APP_URL', text: appUrl }, { type: 'plain_text', name: 'NODE_ENV', text: 'production' }],
+  bindings: [{ type: 'durable_object_namespace', name: 'APP', class_name: CLASS }, { type: 'plain_text', name: 'APP_URL', text: appUrl }, { type: 'plain_text', name: 'NODE_ENV', text: 'production' }, ...(/^[1-9]\d{0,6}$/.test(process.env.PRICE_RUB || '') ? [{ type: 'plain_text', name: 'PRICE_RUB', text: process.env.PRICE_RUB }] : [])],
   keep_bindings: ['plain_text', 'secret_text'],
   ...(existing?.migration_tag ? {} : { migrations: { new_tag: 'v1', new_sqlite_classes: [CLASS] } }),
 };
