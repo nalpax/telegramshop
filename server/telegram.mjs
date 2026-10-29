@@ -7,6 +7,14 @@ export class Telegram {
     if (!response.ok || !data.ok) { const error = new Error('Telegram API request failed'); error.code = data.error_code; error.description = typeof data.description === 'string' ? data.description.slice(0, 200) : undefined; error.retryAfter = data.parameters?.retry_after; throw error; }
     return data.result;
   }
+  // Multipart upload (sendDocument). Same error handling as api(); the token never reaches logs.
+  async upload(method, form, signal) {
+    if (!this.token) throw new Error('Telegram is not configured');
+    const response = await fetch(`https://api.telegram.org/bot${this.token}/${method}`, { method: 'POST', body: form, signal: signal || AbortSignal.timeout(30000) });
+    const data = await response.json();
+    if (!response.ok || !data.ok) { const error = new Error('Telegram API request failed'); error.code = data.error_code; throw error; }
+    return data.result;
+  }
   // Every configured channel/chat must be joined. An empty list means the gate is not configured: nobody passes.
   async isMember(userId, channels) {
     const list = channels || channelsFor();

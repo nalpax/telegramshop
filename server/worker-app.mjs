@@ -4,6 +4,7 @@ import { createHmac } from 'node:crypto';
 import { makeApi } from './api.mjs';
 import { configureBot, handleUpdate, sendReminders, validateAppUrl } from './bot-core.mjs';
 import { sendOffers } from './offers.mjs';
+import { adminChatIds, weeklyBackup } from './backup.mjs';
 import { safeEqual } from './providers/index.mjs';
 import { channelsFor } from './telegram.mjs';
 import { MIME, SECURITY_HEADERS, body, errorStatus, json } from './http-common.mjs';
@@ -104,6 +105,7 @@ export function makeWorkerApp({ store, telegram, content, env = process.env, log
     if (!env.BOT_TOKEN || !validateAppUrl(appUrl)) return 0;
     const sent = await sendReminders({ store, api: telegramApi, appUrl, titles: (content.lessons || []).map(l => l.title), now, log });
     await sendOffers({ store, api: telegramApi, appUrl, purchase: api.purchaseInfo, now, log }); // off unless enabled in the admin panel
+    try { await weeklyBackup({ store, telegram, chatIds: adminChatIds(), now }); } catch (error) { log(`Weekly backup failed (code ${Number(error.code) || 'network'}).`); }
     return sent;
   };
   return handle;

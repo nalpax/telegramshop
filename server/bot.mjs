@@ -7,6 +7,7 @@ import { Store } from './store.mjs';
 import { configureBot, handleUpdate, sendReminders, validateAppUrl } from './bot-core.mjs';
 import { loadContent } from './content-node.mjs';
 import { sendOffers } from './offers.mjs';
+import { adminChatIds, weeklyBackup } from './backup.mjs';
 import { makeApi } from './api.mjs';
 import { Telegram } from './telegram.mjs';
 export { messageFor, validateAppUrl } from './bot-core.mjs';
@@ -33,7 +34,7 @@ async function run() {
     // Hourly bot reminders (one message after 3 quiet days, see bot-core.mjs).
     const content = await loadContent(); const titles = content.lessons.map(l => l.title);
     const purchase = makeApi(store, new Telegram(token), content).purchaseInfo;
-    const remind = () => sendReminders({ store, api, appUrl, titles }).then(() => sendOffers({ store, api, appUrl, purchase })).catch(() => console.error('Reminders or offers failed. No tokens or user data logged.'));
+    const remind = () => sendReminders({ store, api, appUrl, titles }).then(() => sendOffers({ store, api, appUrl, purchase })).then(() => weeklyBackup({ store, telegram: new Telegram(token), chatIds: adminChatIds() })).catch(() => console.error('Reminders or offers failed. No tokens or user data logged.'));
     const timer = setInterval(remind, 3600000); controller.signal.addEventListener('abort', () => clearInterval(timer)); remind();
     let offset = 0;
     while (!controller.signal.aborted) {

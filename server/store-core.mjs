@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 
 // Platform-neutral store. `db` is anything with exec(sql) and prepare(sql).get/all/run(...args) -> {changes}:
 // node:sqlite on a server (server/store.mjs), Durable Object SQLite on Cloudflare (server/durable-sql.mjs).
+// Every table with data worth keeping, parents before children (orders before payments and invoices).
+export const BACKUP_TABLES = ['users', 'orders', 'payments', 'refunds', 'provider_invoices', 'progress', 'settings', 'promo_codes', 'audit', 'favorites', 'task_checks', 'funnel_events'];
 export class StoreCore {
   constructor(db) {
     this.db = db;
@@ -72,6 +74,20 @@ export class StoreCore {
   markReminded(userId, now = Date.now()) { this.db.prepare('UPDATE users SET reminded_at=? WHERE id=?').run(now, userId); }
   setReminders(userId, on) { this.db.prepare('UPDATE users SET reminders_off=? WHERE id=?').run(on ? 0 : 1, userId); }
   remindersOn(userId) { return !this.db.prepare('SELECT reminders_off FROM users WHERE id=?').get(userId)?.reminders_off; }
+  // ---- backup (server/backup.mjs, scripts/restore-backup.mjs) ----
+  dump(now = Date.now()) { return { format: 'vibentry-backup', version: 1, createdAt: new Date(now).toISOString(), tables: Object.fromEntries(BACKUP_TABLES.map(t => [t, this.db.prepare(`SELECT * FROM ${t}`).all()])) }; }
+  isEmpty() { return !this.db.prepare('SELECT 1 FROM users LIMIT 1').get() && !this.db.prepare('SELECT 1 FROM payments LIMIT 1').get(); }
+  // Replaces everything with the backup. Used by the restore script on a server; wrap it in a transaction there.
+  restore(backup) {
+    if (backup?.format !== 'vibentry-backup' || typeof backup.tables !== 'object') throw new Error('This is not a Vibentry backup');
+    for (const table of [...BACKUP_TABLES].reverse()) this.db.prepare(`DELETE FROM ${table}`).run();
+    for (const table of BACKUP_TABLES) for (const row of backup.tables[table] || []) {
+      const columns = Object.keys(row).filter(c => /^[a-z_]+$/.test(c));
+      this.db.prepare(`INSERT INTO ${table} (${columns.join(',')}) VALUES (${columns.map(() => '?').join(',')})`).run(...columns.map(c => row[c]));
+    }
+  }
+  lastBackupAt() { return Number(this.db.prepare("SELECT value FROM settings WHERE key='last_backup_at'").get()?.value) || 0; }
+  setLastBackupAt(now) { this.db.prepare("INSERT INTO settings VALUES ('last_backup_at',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(String(now)); }
   // ---- funnel: the first time each person reaches a step ----
   markStep(userId, step, now = Date.now()) { this.db.prepare('INSERT OR IGNORE INTO funnel_events VALUES (?,?,?)').run(userId, step, now); }
   // Administrators are left out: the owner tests the app all the time and would skew the numbers.

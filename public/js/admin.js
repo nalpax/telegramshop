@@ -50,6 +50,7 @@ export function createAdmin({ sendApi, getApi, toast, modal, closeModal, config,
     const card = (label, value, hint = '') => `<div class="stat-card"><small>${label}</small><strong>${value}</strong>${hint ? `<span>${hint}</span>` : ''}</div>`;
     return `<div class="stat-grid">${card('Участников', s.users, `+${s.new7} за 7 дней`)}${card('Pro', s.pro, `конверсия ${s.conversion}%`)}${card('Free', s.free)}${card('Выручка', revenueText(s), s.refunds ? `возвратов: ${s.refunds}` : 'без возвратов')}</div>
     ${funnelCard()}
+    <section class="admin-card"><h2>Резервная копия</h2><p class="admin-line">Бот присылает файл со всей базой (участники, покупки, прогресс, настройки) вам в чат — автоматически раз в неделю и по кнопке. Файл нельзя переслать; в нём личные данные — храните его в надёжном месте.</p><button type="button" class="button button-secondary" data-adm="backup">Прислать копию базы в Telegram${icon('download')}</button></section>
     <section class="admin-card"><h2>Последние 14 дней</h2>${chart(s)}</section>
     <section class="admin-card"><h2>Сейчас в продаже</h2><p class="admin-line">${(() => { const p = state.overview.prices || {}; const parts = [p.rub && `${p.rub} ₽`, p.stars && `${p.stars} ★`, p.usdt && `${p.usdt} USDT`].filter(Boolean); return parts.length ? `<strong>${parts.join(' · ')}</strong>${p.salePercent ? ` · скидка −${p.salePercent}%` : ' · без скидки'} · доступ навсегда` : 'Цена не задана — оплата выключена.'; })()}</p><p class="admin-line">Для бесплатных уроков: ${state.overview.effectiveChannels.length ? state.overview.effectiveChannels.map(c => `<b>${e(c.title)}</b>`).join(', ') : '<b class="warn">каналы не заданы — приложение никого не пустит</b>'}</p></section>`;
   }
@@ -84,7 +85,7 @@ export function createAdmin({ sendApi, getApi, toast, modal, closeModal, config,
     const items = state.audit?.items || [];
     return `<section class="admin-card"><h2>Последние действия</h2>${items.length ? items.map(a => `<div class="log-row"><small>${fmtDate(a.at)}</small><span><b>${e(a.admin)}</b> · ${e(logName(a.action))}${a.detail ? ' · ' + e(a.detail) : ''}</span></div>`).join('') : '<p class="admin-empty">Пока пусто.</p>'}</section>`;
   }
-  const logName = action => ({ 'auto-offers': 'автоскидки в боте', offer: 'цена и скидка', channels: 'каналы доступа', promo: 'промокод', 'promo-delete': 'промокод удалён', provider: 'способ оплаты', 'rate-limit': 'частые запросы (похоже на парсинг)', grant: 'выдан Pro', revoke: 'Pro отозван' }[action] || action);
+  const logName = action => ({ backup: 'резервная копия', 'auto-offers': 'автоскидки в боте', offer: 'цена и скидка', channels: 'каналы доступа', promo: 'промокод', 'promo-delete': 'промокод удалён', provider: 'способ оплаты', 'rate-limit': 'частые запросы (похоже на парсинг)', grant: 'выдан Pro', revoke: 'Pro отозван' }[action] || action);
 
   function paint() {
     const box = root(); if (!box) return;
@@ -137,6 +138,7 @@ export function createAdmin({ sendApi, getApi, toast, modal, closeModal, config,
       try { await sendApi(`/api/admin/${action}`, { userId: Number(id) }); toast(action === 'grant' ? 'Pro выдан.' : 'Pro отозван.'); closeModal(); state.users = null; state.overview = null; load(state.tab); }
       catch { toast('Не получилось. Попробуйте ещё раз.'); target.disabled = false; }
     }
+    else if (action === 'backup') { target.disabled = true; try { await sendApi('/api/admin/backup', {}); toast('Файл отправлен вам в чат с ботом.'); } catch (error) { toast(error.message === 'Request failed' ? 'Не удалось отправить. Напишите боту /start и попробуйте ещё раз.' : error.message); } target.disabled = false; }
     else if (action === 'funnel-days') { state.funnelDays = Number(target.dataset.id); load('overview'); }
     else if (action === 'save-auto-offers') {
       const form = document.querySelector('#auto-offers-form'); if (!form.reportValidity()) return;

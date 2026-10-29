@@ -4,6 +4,7 @@ import { makeProviders } from './providers/index.mjs';
 import { fingerprint } from './fingerprint.mjs';
 import { FREE_PRACTICE_LAUNCHES, HANDOVER, QUIZ, TRAINER_IDS } from './practice-data.mjs';
 import { MAX_OFFER_PERCENT, offerSettings } from './offers.mjs';
+import { sendBackup } from './backup.mjs';
 // Course content is passed in by the host: server/content-node.mjs reads data/ for Node, the Cloudflare build bundles it.
 // Date of the current terms and privacy policy (public/terms.html, public/privacy.html). Change both when the texts change.
 const DOCUMENTS_DATE = '2026-10-29';
@@ -195,6 +196,11 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
         store.saveProviderState({ ...store.providerState(), [provider.id]: data.enabled === true });
         store.log(user.id, 'provider', `${provider.id} ${data.enabled === true ? 'on' : 'off'}`);
         return send(200, overview());
+      }
+      if (route === 'backup') {
+        try { await sendBackup({ store, telegram, chatIds: [user.id] }); } catch { return send(502, { error: 'Не удалось отправить файл. Напишите боту /start и попробуйте ещё раз.' }); }
+        store.log(user.id, 'backup', 'копия отправлена в Telegram');
+        return send(200, { ok: true });
       }
       if (route === 'auto-offers') {
         const ladder = Array.isArray(data.ladder) ? data.ladder : [];
