@@ -10,6 +10,7 @@
 **Настройки — в панели Cloudflare:** Workers & Pages → `vibentry` → Settings → Variables and Secrets.
 - `BOT_TOKEN` — тип **Secret** (не Text). Токен никому не отправляйте, вводите только сюда.
 - `BOT_USERNAME`, `ADMIN_IDS`, `SUPPORT_USERNAME`, при желании `MEMBERSHIP_CACHE_SECONDS` — тип Text.
+- `SELLER_NAME` (ФИО) и `SELLER_INN` (12 цифр), при желании `SUPPORT_EMAIL` — тип Text. Они показываются на страницах документов: `/tariffs.html`, `/terms.html`, `/privacy.html`, `/contacts.html` (их запрашивают банк и платёжный провайдер). Цены на `/tariffs.html` берутся из Админки → Акции.
 - Ключи платёжных провайдеров (раздел 7) — тип Secret.
 После сохранения Cloudflare сам перезапускает воркер. Повторная выкладка эти значения сохраняет.
 

@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+    <meta name="theme-color" content="#061b12" />
+    <meta name="description" content="Контакты поддержки Vibentry." />
+    <title>Контакты — Vibentry</title>
+    <link rel="icon" href="/assets/brand.png" />
+    <link rel="stylesheet" href="/style.css" />
+    <script type="module" src="/js/legal.js"></script>
+  </head>
+  <body class="doc-body">
+    <div class="doc-page">
+      <header class="doc-header"><a class="doc-brand" href="/tariffs.html"><img src="/assets/brand.png" alt="" width="44" height="44" /><span>Vibentry<small>Курс по вайбкодингу в Telegram</small></span></a></header>
+      <nav class="doc-nav" aria-label="Документы"><a href="/tariffs.html">Тарифы</a><a href="/terms.html">Соглашение</a><a href="/privacy.html">Конфиденциальность</a><a href="/contacts.html">Контакты</a></nav>
+      <main class="doc-main">
+        <h1>Контакты</h1>
+        <section class="doc-card">
+          <h2>Поддержка</h2>
+          <p>Вопросы о курсе, доступе, оплате и возврате — автору курса в Telegram: <a data-legal="support-telegram" href="https://t.me/nalpax">@nalpax</a>.</p>
+          <p data-legal-if="support-email" class="is-hidden">Электронная почта: <a data-legal="support-email" href="#"></a>.</p>
+          <p data-legal-if="bot" class="is-hidden">Бот Vibentry: <a data-legal="bot" href="#"></a>. Команды /support и /paysupport подскажут, куда написать.</p>
+        </section>
+        <section class="doc-card">
+          <h2>Что указать в обращении</h2>
+          <ul>
+            <li>Ваш Telegram ID — его пришлёт бот по команде /id.</li>
+            <li>Если вопрос об оплате: дату, сумму и способ оплаты.</li>
+          </ul>
+          <p>Никому не отправляйте пароли, коды из SMS и данные банковских карт — поддержка их никогда не спрашивает.</p>
+        </section>
+        <section class="doc-card">
+          <h2>Исполнитель</h2>
+          <p>Статус: <span data-legal="seller-status">самозанятый (плательщик налога на профессиональный доход)</span></p>
+          <p data-legal-if="seller-name" class="is-hidden">ФИО: <span data-legal="seller-name"></span></p>
+          <p data-legal-if="seller-inn" class="is-hidden">ИНН: <span data-legal="seller-inn"></span></p>
+        </section>
+        <p>Документы: <a href="/tariffs.html">тарифы и цены</a>, <a href="/terms.html">пользовательское соглашение</a>, <a href="/privacy.html">политика конфиденциальности</a>.</p>
+      </main>
+      <footer class="doc-footer">
+        <p>Исполнитель: <span data-legal="seller-status">самозанятый (плательщик налога на профессиональный доход)</span><span data-legal-if="seller-name" class="is-hidden"> <span data-legal="seller-name"></span></span><span data-legal-if="seller-inn" class="is-hidden">, ИНН <span data-legal="seller-inn"></span></span>.</p>
+        <p class="doc-warning is-hidden" data-legal-if="seller-missing">ФИО и ИНН исполнителя ещё не заполнены в настройках сервера.</p>
+        <p>Поддержка: <a data-legal="support-telegram" href="https://t.me/nalpax">@nalpax</a><span data-legal-if="support-email" class="is-hidden">, почта <a data-legal="support-email" href="#"></a></span>.</p>
+      </footer>
+    </div>
+  </body>
+</html>
