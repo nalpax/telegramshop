@@ -1,11 +1,12 @@
-import { icon, art } from './icons.js';
+import { icon } from './icons.js';
 import { FREE_LESSONS, modules, lessons, materials } from './course.js';
 import { renderMarkdown } from './markdown.js';
 import { createAdmin, planBadge } from './admin.js';
 import { installProtection } from './protect.js';
 import { GROUPS, TERMS, linkTerms } from './glossary.js';
 import { onboardingScreen } from './onboarding.js';
-import { mountPractice, practiceList, practicePaywall, practiceScreen, setPracticeData } from './practice.js';
+import { mountPractice, practicePaywall, practiceScreen, setPracticeData, trainers } from './practice.js';
+import { art3d, exerciseHtml, exerciseLocked, exerciseTypeName, site3d, stagePanel, stageStepper, startAnswer } from './learn.js';
 import { progress, saveProgress, complete, resetProgress, escape as e } from './state.js';
 
 const app = document.querySelector('#app');
@@ -34,7 +35,7 @@ function pushRecent(id) { writeLocal(RECENT_KEY, [id, ...readLocal(RECENT_KEY, [
 // Bookmarks (prompts, lessons, articles) live on the server (/api/favorites); in the demo they stay in memory.
 // «Недавно открытое» is a per-device list (localStorage, last 6), never sent anywhere.
 let favorites = [];
-const KIND = { prompt: ['Промпт', 'copy'], lesson: ['Урок', 'book'], article: ['База', 'file'] };
+const KIND = { prompt: ['Промпт', 'copy'], lesson: ['Урок', 'book'], article: ['База', 'file'], resource: ['Шаблон', 'copy'] };
 const OPENED_KEY = 'vibentry.opened.v1';
 const sameItem = (f, kind, id) => f.kind === kind && String(f.id) === String(id);
 const isFav = (kind, id) => favorites.some(f => sameItem(f, kind, id));
@@ -76,6 +77,129 @@ function recentStrip() {
   if (!items.length) return '';
   return `<section class="recent-strip" aria-labelledby="recent-title"><div class="section-heading"><h2 id="recent-title">Недавно открытое</h2></div><div class="recent-row">${items.map(x => `<button class="recent-item" data-action="${x.kind}" data-id="${e(String(x.id))}"><span class="recent-kind">${icon(KIND[x.kind][1])}${KIND[x.kind][0]}${x.kind === 'lesson' ? ' ' + String(x.id).padStart(2, '0') : ''}</span><strong>${e(x.title)}</strong></button>`).join('')}</div></section>`;
 }
+// ---- learning project and lesson exercises (learn.js; server/exercises.mjs checks and stores the answers) ----
+// project / exList come from the server and are tied to the verified Telegram account. Drafts of an answer live in
+// localStorage (per exercise and version) only until the answer is checked.
+let project = null; let projectFailed = false; let exList = null; let viewStage = '';
+const exState = new Map();
+const DRAFT_KEY = 'vibentry.drafts.v1';
+const wide = () => matchMedia('(min-width:1024px)').matches;
+let projectLoading = null; let exListLoading = null;
+function loadProject(force = false) {
+  if ((project && !force) || projectLoading) return projectLoading;
+  projectLoading = getApi('/api/project').then(p => { project = p; projectFailed = false; }, () => { projectFailed = !project; }).finally(() => { projectLoading = null; refreshLearning(); });
+  return projectLoading;
+}
+function loadExercises(force = false) {
+  if ((exList && !force) || exListLoading) return exListLoading;
+  exListLoading = getApi('/api/exercises').then(r => { exList = r.items || []; }, () => {}).finally(() => { exListLoading = null; refreshLearning(); });
+  return exListLoading;
+}
+// Re-draw the blocks that depend on the project or the exercise list, in place.
+function refreshLearning() {
+  const blocks = { 'project-card': projectCard, 'home-practice': homePractice };
+  document.querySelectorAll('[data-learn]').forEach(node => {
+    const name = node.dataset.learn;
+    if (blocks[name]) node.outerHTML = blocks[name]();
+    else if (name === 'project-view') { if (project && !project.stages.some(s => s.id === viewStage)) viewStage = project.stages[project.current].id; node.innerHTML = projectBody(); }
+    else if (name === 'lesson-panel') node.innerHTML = lessonPanel(Number(node.dataset.id));
+    else if (name === 'practice-list') { const q = new URLSearchParams(location.hash.split('?')[1] || ''); if (!q.get('ex') && !q.get('id')) { const shown = document.querySelector('#practice-work [data-ex-slot]')?.dataset.exSlot; if (shown) q.set('ex', shown); } node.innerHTML = practiceList2(q); }
+  });
+}
+async function ensureExercise(id, force = false) {
+  const known = exState.get(id);
+  if (!force && known && (known.x || known.locked || known.loading)) return;
+  exState.set(id, { loading: true });
+  try {
+    const response = await fetch('/api/exercises/' + encodeURIComponent(id), { headers: { 'X-Telegram-Init-Data': tg?.initData || '' } });
+    if (response.status === 403) { const body = await response.json().catch(() => ({})); exState.set(id, { locked: body.card || exList?.find(x => x.id === id) || { id, title: 'Задание', skill: '', type: '', lesson: 0 } }); }
+    else if (!response.ok) throw new Error('exercise');
+    else {
+      const { exercise, saved } = await response.json();
+      const draft = readLocal(DRAFT_KEY, {})[`${id}@${exercise.version}`];
+      exState.set(id, { x: exercise, saved, answer: startAnswer(exercise, saved, draft), result: saved && !saved.outdated ? saved.result : null });
+    }
+  } catch { exState.set(id, { failed: true }); }
+  paintExercise(id);
+}
+function exerciseInner(id, compact) {
+  const st = exState.get(id);
+  if (!st || st.loading) return '<div class="loading" role="status">Загружаем задание<span></span></div>';
+  if (st.failed) return `<div class="empty-state compact">${icon('file')}<h3>Задание не загрузилось</h3><p>Проверьте соединение и попробуйте ещё раз.</p><button class="button button-secondary" data-action="ex-load" data-id="${e(id)}">Повторить${icon('arrow')}</button></div>`;
+  if (st.locked) return exerciseLocked(st.locked, { price: priceLabel() });
+  return exerciseHtml(st.x, st, { lessonTitle: n => lessons[n - 1]?.title || '', compact });
+}
+function exerciseSlot(id, compact = false) { return `<div class="ex-slot" data-ex-slot="${e(id)}" data-compact="${compact ? '1' : ''}">${exerciseInner(id, compact)}</div>`; }
+function paintExercise(id) {
+  document.querySelectorAll(`[data-ex-slot="${CSS.escape(id)}"]`).forEach(slot => {
+    const focused = document.activeElement?.closest?.('[data-ex-slot]') === slot ? document.activeElement : null;
+    const key = focused && (focused.id || `${focused.dataset.action}|${focused.dataset.id}|${focused.dataset.item || ''}`);
+    slot.innerHTML = exerciseInner(id, !!slot.dataset.compact);
+    // Keep the keyboard focus on the same control after a move or a pick (buttons are re-drawn).
+    if (key) (focused.id ? slot.querySelector('#' + CSS.escape(focused.id)) : [...slot.querySelectorAll('[data-action]')].find(b => `${b.dataset.action}|${b.dataset.id}|${b.dataset.item || ''}` === key && !b.disabled))?.focus();
+  });
+}
+function saveDraft(id) { const st = exState.get(id); if (!st?.x) return; const drafts = readLocal(DRAFT_KEY, {}); drafts[`${id}@${st.x.version}`] = st.answer; writeLocal(DRAFT_KEY, drafts); }
+function clearDraft(id) { const st = exState.get(id); if (!st?.x) return; const drafts = readLocal(DRAFT_KEY, {}); delete drafts[`${id}@${st.x.version}`]; writeLocal(DRAFT_KEY, drafts); }
+function editExercise(id, change) {
+  const st = exState.get(id); if (!st?.x || st.busy) return;
+  change(st.answer, st.x); st.error = ''; saveDraft(id); paintExercise(id);
+}
+async function checkExercise(id) {
+  const st = exState.get(id); if (!st?.x || st.busy) return;
+  st.busy = true; st.error = ''; paintExercise(id);
+  try {
+    const r = await sendApi('/api/exercises/' + encodeURIComponent(id), { answer: st.answer });
+    st.result = r.result;
+    if (r.saved) { st.saved = { ...(st.saved || {}), answer: st.answer, passed: r.passed, attempts: (st.saved?.attempts || 0) + 1, outdated: false }; clearDraft(id); }
+    try { tg?.HapticFeedback.notificationOccurred(r.result.passed ? 'success' : 'warning'); } catch {}
+    if (r.saved) { const item = exList?.find(x => x.id === id); if (item) { item.passed = r.passed; item.attempts = st.saved.attempts; } loadProject(true); }
+  } catch (error) {
+    st.error = error.status === 403 ? 'Задание откроется после покупки.' : error.status === 429 ? 'Слишком много попыток подряд. Подождите несколько минут.' : /[А-Яа-я]/.test(error.message || '') ? error.message : 'Не удалось проверить ответ. Проверьте соединение и нажмите «Проверить» ещё раз — ответ сохранён на этом устройстве.';
+    saveDraft(id);
+  }
+  st.busy = false; paintExercise(id); refreshLearning();
+  document.querySelector(`[data-ex-slot="${CSS.escape(id)}"] .ex-result`)?.scrollIntoView({ block: 'nearest', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+}
+
+// ---- «Практика»: choose on the left, work on the right; on a phone the chosen task opens as its own screen ----
+function practiceList2(params) {
+  const ex = params.get('ex'); const id = params.get('id');
+  const limits = session?.practice; const free = limits && !limits.unlimited;
+  const exRows = exList ? exList.map(x => `<a class="pick-row ${ex === x.id ? 'is-selected' : ''} ${x.open ? '' : 'is-locked'}" href="#practice?ex=${x.id}" ${ex === x.id ? 'aria-current="true"' : ''}><span class="pick-type">${e(exerciseTypeName(x.type))} · урок ${pad2(x.lesson)}</span><strong>${e(x.title)}</strong><span class="pick-state">${x.passed ? `${icon('check')}засчитано` : !x.open ? `${icon('lock')}полный доступ` : x.attempts ? 'есть попытки' : 'не начато'}</span></a>`).join('') : '<div class="loading" role="status">Загружаем задания<span></span></div>';
+  const trainerRows = trainers.map(t => `<a class="pick-row ${id === t.id ? 'is-selected' : ''}" href="#practice?id=${t.id}" ${id === t.id ? 'aria-current="true"' : ''}><span class="pick-type">Тренажёр · ${e(t.minutes)}</span><strong>${e(t.title)}</strong><span class="pick-state">${e(t.description)}</span></a>`).join('');
+  return `<h2 class="pick-title">Задания уроков</h2><p class="pick-note">Связаны с уроками и этапами проекта. Не тратят бесплатные запуски.</p><div class="pick-list">${exRows}</div><h2 class="pick-title">Тренажёры</h2><p class="pick-note">${free ? `Бесплатно: осталось ${limits.remaining} из ${limits.limit} запусков. С полным доступом — без ограничений.` : 'Конструктор, квиз, калькулятор и проверка перед сдачей.'}</p><div class="pick-list">${trainerRows}</div>`;
+}
+function practiceView(params) {
+  loadExercises();
+  const ex = params.get('ex'); const id = params.get('id');
+  let work = ''; const listParams = new URLSearchParams(params);
+  if (ex) { ensureExercise(ex); work = exerciseSlot(ex); }
+  else if (id) work = trainerWork(id);
+  else if (wide() && exList) { const first = exList.find(x => x.open && !x.passed) || exList.find(x => x.open) || exList[0]; if (first) { ensureExercise(first.id); work = exerciseSlot(first.id); listParams.set('ex', first.id); } }
+  else if (wide()) work = '<div class="loading" role="status">Загружаем задания<span></span></div>';
+  const chosen = !!(ex || id);
+  return `<header class="page-header">${brand(true)}<div><h1>Практика</h1><p>Задания уроков и тренажёры: ответ, проверка, разбор, новая попытка</p></div></header><div class="split-layout practice-layout ${chosen ? 'has-work' : ''}"><aside class="split-main practice-side" data-learn="practice-list" aria-label="Выбор задания">${practiceList2(listParams)}</aside><section class="split-side practice-work" id="practice-work" aria-label="Рабочая область">${chosen ? `<a href="#practice" class="back-link practice-back">${icon('back')}Все задания</a>` : ''}${work}</section></div>${nav('practice')}`;
+}
+// A trainer opens only after the server allows the launch (free accounts: 3 in total); a launch counts once per app session.
+function trainerWork(id) {
+  if (practiceStarted.has(id)) return practiceScreen(id);
+  if (practiceBlocked.has(id) || (session?.practice && !session.practice.unlimited && session.practice.remaining <= 0)) return practicePaywall(id, priceLabel());
+  startPractice(id, renderEpoch);
+  return '<div class="loading" role="status">Открываем тренажёр<span></span></div>';
+}
+async function startPractice(id, epoch) {
+  try {
+    const result = await sendApi('/api/practice', { id });
+    setPracticeData(result.data); practiceStarted.add(id);
+    if (session) session.practice = { unlimited: result.unlimited, limit: result.limit, remaining: result.remaining };
+    if (!result.unlimited) toast(result.remaining ? `Бесплатный запуск. Осталось ${result.remaining} из ${result.limit}.` : 'Это был последний бесплатный запуск «Практикума».');
+  } catch (error) {
+    if (error.status === 403) { practiceBlocked.add(id); if (session?.practice) session.practice.remaining = 0; }
+    else if (epoch === renderEpoch) { const box = document.querySelector('#practice-work'); if (box) box.innerHTML = errorPanel(); return; }
+  }
+  if (route().name === 'practice' && route().params.get('id') === id) render();
+}
 async function loadMarks() { if (config.preview || !session?.subscribed) return; try { marks = await getApi('/api/marks'); } catch {} }
 async function saveMark(change) { if (config.preview) return true; try { marks = await sendApi('/api/marks', change); return true; } catch (error) { if (error.status === 403) openAccess(); else toast('Не удалось сохранить. Проверьте соединение.'); return false; } }
 const library = { prompts: null, articles: null, failed: {} };
@@ -86,7 +210,7 @@ let search = '';
 let toastTimer;
 let modalReturnFocus;
 const freeCache = new Map();
-const urlFor = (tab = 'lessons') => `#materials?tab=${tab}`;
+const urlFor = (tab = 'lessons') => (tab === 'lessons' ? '#lessons' : `#materials?tab=${tab}`);
 async function loadLibrary(tab, force = false) {
   const kind = tab === 'prompts' ? 'prompts' : tab === 'base' ? 'articles' : null;
   if (!kind || (library[kind] && !force)) return;
@@ -100,71 +224,83 @@ async function loadLibrary(tab, force = false) {
 }
 function refreshResults() { const box = document.querySelector('#catalogue-results'); if (box && route().name === 'materials') box.innerHTML = catalogueBody(catalogueTab); }
 
-try { tg?.ready(); tg?.expand(); tg?.setHeaderColor('#061b12'); tg?.setBackgroundColor('#061b12'); } catch {}
+try { tg?.ready(); tg?.expand(); tg?.setHeaderColor('#031c14'); tg?.setBackgroundColor('#031c14'); } catch {}
 try { tg?.BackButton.onClick(back); } catch {}
 
 function route() { const [name, params] = (location.hash.slice(1) || 'home').split('?'); return { name, params: new URLSearchParams(params) }; }
 function go(hash) { if (location.hash === hash) render(); else location.hash = hash; }
-// Telegram's «Назад»: a reader returns to its list, a trainer to «Практикум», every other screen to the home screen.
-function back() { const { name, params } = route(); go(name === 'article' ? urlFor('base') : name === 'lesson' ? urlFor() : name === 'practice' && params.get('id') ? '#practice' : '#home'); }
+// Telegram's «Назад»: a reader returns to its list, a chosen task to «Практика», every other screen to the home screen.
+function back() { const { name, params } = route(); if (overlay.innerHTML) { closeModal(); return; } go(name === 'article' ? urlFor('base') : name === 'lesson' ? '#lessons?id=' + (params.get('id') || '') : name === 'practice' && (params.get('id') || params.get('ex')) ? '#practice' : '#home'); }
 function brand(compact = false) { return `<a href="#home" class="brand ${compact ? 'brand-compact' : ''}" aria-label="Vibentry — главная"><span class="brand-image"><img src="/assets/brand.png" alt="Знак ve. Vibentry" width="64" height="64"></span>${compact ? '' : '<span><strong>Vibentry<span class="brand-dot">.</span></strong><span class="brand-caption">База по вайбкодингу</span></span>'}</a>`; }
 function nav(active) {
-  const items = [['home', 'home', 'Главная'], ['materials', 'book', 'Материалы'], ['practice', 'play', 'Практикум'], ['profile', 'user', 'Профиль'], ...(session?.isAdmin ? [['admin', 'sparkle', 'Админка']] : [])];
-  return `<nav class="bottom-nav" aria-label="Основная навигация"><a href="#home" class="nav-brand"><img src="/assets/brand.png" alt="" width="40" height="40"><span><strong>Vibentry</strong><small>курс по вайбкодингу</small></span></a>${items.map(([id, glyph, label]) => `<a href="#${id}" class="nav-item ${active === id ? 'is-active' : ''}" ${active === id ? 'aria-current="page"' : ''}>${icon(glyph)}<span>${label}</span></a>`).join('')}${planChip()}</nav>`;
+  // «Мой проект» and «Админка» live in the side menu on a computer; on a phone the project opens from the home card.
+  const items = [['home', 'home', 'Главная'], ['lessons', 'book', 'Уроки'], ['project', 'target', 'Мой проект', 'nav-wide'], ['materials', 'file', 'Материалы'], ['practice', 'play', 'Практика'], ['profile', 'user', 'Профиль'], ...(session?.isAdmin ? [['admin', 'sparkle', 'Админка', 'nav-wide']] : [])];
+  return `<nav class="bottom-nav" aria-label="Основная навигация"><a href="#home" class="nav-brand"><img src="/assets/brand.png" alt="" width="40" height="40"><span><strong>Vibentry</strong><small>курс по вайбкодингу</small></span></a>${items.map(([id, glyph, label, extra = '']) => `<a href="#${id}" class="nav-item ${extra} ${active === id ? 'is-active' : ''}" ${active === id ? 'aria-current="page"' : ''}>${icon(glyph)}<span>${label}</span></a>`).join('')}${planChip()}</nav>`;
 }
 function planChip() { return session?.user ? `<div class="nav-plan">${planBadge(session.access?.active ? 'pro' : 'free')}<span>${e(session.user.first_name)}</span></div>` : ''; }
 function heading(kicker, title, caption = '') { return `<div class="section-heading"><div><p class="eyebrow">${kicker}</p><h2>${title}</h2></div>${caption ? `<span class="section-meta">${caption}</span>` : ''}</div>`; }
-function hero() {
-  return `<section class="hero" aria-labelledby="hero-title"><div class="hero-grid" aria-hidden="true"></div><div class="hero-copy"><span class="eyebrow">ПРАКТИЧЕСКИЙ КУРС</span><h1 id="hero-title">От идеи —<br>к своему сайту<span>.</span></h1><p>Учитесь. Собирайте. Запускайте.</p></div><img class="hero-art" src="/assets/hero.png" width="220" height="220" alt="" fetchpriority="high"></section>`;
+const pad2 = n => String(n).padStart(2, '0');
+const canOpenLesson = id => !!lessons[id - 1]?.free || !!session?.access?.active;
+// The lesson to continue: the first one not done that this account can open, else the first not done at all.
+function nextLesson() { return lessons.find(l => !progress.done.includes(l.id) && canOpenLesson(l.id)) || lessons.find(l => !progress.done.includes(l.id)) || null; }
+const MODULE_ART = { 1: 'template', 2: 'palette', 3: 'brief', 4: 'checklist' };
+// Learning project card (home and «Мой проект»): the volumetric site shows how many stages are really done.
+function projectCard() {
+  const p = project; const done = p?.completed || 0; const cur = p?.stages?.[p.current];
+  const line = !p ? (projectFailed ? 'Не удалось загрузить проект.' : 'Загружаем проект…') : done === 4 ? 'Все 4 этапа завершены' : `Учебный проект · этап ${p.current + 1} из 4 · ${e(cur.title)}`;
+  return `<section class="project-card" data-learn="project-card" aria-labelledby="project-title"><div class="project-copy"><span class="eyebrow">Ваш следующий шаг</span><h1 id="project-title">Ваш сайт обретает форму</h1><p>Проходите уроки, выполняйте задания — и учебный сайт собирается вместе с вами.</p><p class="project-line">${line}</p>${p ? stageStepper(p, '') : projectFailed ? '<button class="button button-secondary" data-action="project-retry">Повторить</button>' : ''}<a class="text-link project-open" href="#project">Открыть проект${icon('arrow')}</a></div><div class="project-art">${site3d(done, '')}</div></section>`;
 }
-function tile(title, subtitle, kind, hash, action = '') { return `<a class="quick-tile tile-${kind}" href="${hash}" ${action ? `data-action="${action}"` : ''}><div><h3>${title}</h3><p>${subtitle}</p></div>${art(kind)}<span class="tile-arrow">${icon('arrow')}</span></a>`; }
+function lessonNowCard() {
+  const l = nextLesson();
+  const n = progress.done.length;
+  if (!l) return `<section class="lesson-now"><span class="lesson-now-art">${art3d('flag')}</span><div class="lesson-now-copy"><span class="eyebrow">Курс пройден</span><h2>Все 24 урока пройдены</h2><p>Закрепите навык в «Практике» и соберите следующий проект.</p></div><a class="button button-primary" href="#practice">Открыть практику${icon('arrow')}</a></section>`;
+  const locked = !canOpenLesson(l.id);
+  const freeDone = locked && lessons.filter(x => x.free).every(x => progress.done.includes(x.id));
+  const action = freeDone ? `<a class="button button-primary" href="#next">Что дальше в курсе${icon('arrow')}</a>` : `<button class="button button-primary" data-action="lesson" data-id="${l.id}">${locked ? 'Открыть доступ' : n ? 'Продолжить урок' : 'Начать урок'}${icon(locked ? 'lock' : 'arrow')}</button>`;
+  return `<section class="lesson-now" aria-labelledby="lesson-now-title"><span class="lesson-now-art">${art3d(MODULE_ART[l.module])}</span><div class="lesson-now-copy"><span class="eyebrow">${n ? 'Продолжить обучение' : 'Начните с первого урока'}</span><h2 id="lesson-now-title">${pad2(l.id)} · ${e(l.title)}</h2><p>${e(l.outcome)}</p><div class="progress-caption"><span>Пройдено ${n} из 24 уроков</span><span>${Math.round(n / 24 * 100)}%</span></div><progress max="24" value="${n}" aria-label="Прогресс курса"></progress></div>${action}</section>`;
+}
+// «Ваша практика»: the next lesson exercise this account can do, right on the home screen.
+function homePractice() {
+  const head = `<div class="section-heading"><h2>Ваша практика</h2><a class="section-link" href="#practice">Все задания${icon('chevron')}</a></div>`;
+  if (!exList) return `<section class="home-practice" data-learn="home-practice">${head}<div class="loading" role="status">Загружаем задания<span></span></div></section>`;
+  const next = exList.find(x => x.open && !x.passed);
+  if (!next) {
+    const locked = exList.find(x => !x.open);
+    return `<section class="home-practice" data-learn="home-practice">${head}<div class="empty-state compact">${icon('check')}<h3>Доступные задания засчитаны</h3><p>${locked ? `Остальные ${exList.filter(x => !x.open).length} заданий откроются вместе с уроками полного курса.` : 'Можно вернуться к любому заданию и пройти его ещё раз.'}</p><a class="button button-secondary" href="#practice">Открыть практику${icon('arrow')}</a></div></section>`;
+  }
+  ensureExercise(next.id);
+  return `<section class="home-practice" data-learn="home-practice">${head}${exerciseSlot(next.id, true)}</section>`;
+}
+function homeMaterials() {
+  const card = (artKind, title, text, href, label) => `<a class="mat-tile" href="${href}"><span class="mat-tile-art">${art3d(artKind)}</span><span class="mat-tile-copy"><strong>${title}</strong><small>${text}</small><span class="mat-tile-go">${label}${icon('arrow')}</span></span></a>`;
+  return `<section class="home-materials" aria-labelledby="home-mat-title"><div class="section-heading"><h2 id="home-mat-title">Материалы и практика</h2><a class="section-link" href="#materials">Вся библиотека${icon('chevron')}</a></div><div class="mat-tiles">${card('braces', 'Конструктор промпта', 'Цель, аудитория, блоки — и готовый запрос для первой страницы.', '#practice?id=builder', 'Собрать промпт')}${card('folder', 'Шаблоны из уроков', 'Бриф, оценка работ, отклик на заявку и список передачи.', urlFor('templates'), 'Открыть шаблоны')}${card('checklist', 'Проверка перед запуском', 'Десять пунктов из урока 12: путь посетителя по вашему сайту.', '#practice?ex=launch-check', 'Открыть проверку')}${card('brief', `${config.library?.prompts || 300} промптов`, 'Готовые запросы для каждого этапа: от брифа до сдачи.', urlFor('prompts'), 'Открыть промпты')}</div></section>`;
+}
 function home() {
-  const next = lessons[progress.last - 1];
-  const freeDone = lessons.filter(l => l.free).every(l => progress.done.includes(l.id)) && !session?.access?.active;
-  const eyebrow = freeDone ? 'БЕСПЛАТНЫЕ УРОКИ ПРОЙДЕНЫ' : progress.done.length ? 'ВАШ СЛЕДУЮЩИЙ ШАГ' : 'НАЧНИТЕ С МАЛЕНЬКОГО';
-  const title = freeDone ? 'Продолжим создавать?' : `${String(next.id).padStart(2, '0')} · ${e(next.title)}`;
-  const label = freeDone ? 'Посмотреть полную программу' : progress.done.length ? 'Продолжить урок' : 'Начать бесплатно';
-  const percent = Math.round(progress.done.length / 24 * 100);
+  loadProject(); loadExercises();
   return `<header class="home-header">${brand()}</header>
-  ${hero()}
-  <section class="continue-card" aria-labelledby="continue-title"><div class="continue-top"><span class="eyebrow">${eyebrow}</span>${icon(freeDone ? 'check' : 'sparkle')}</div><h2 id="continue-title">${title}</h2><div class="progress-caption"><span>Пройдено ${progress.done.length} из 24 уроков</span><span>${percent}%</span></div><progress max="24" value="${progress.done.length}" aria-label="Прогресс курса"></progress>${freeDone ? `<a class="button button-primary" href="#next">${label}${icon('arrow')}</a>` : `<button class="button button-primary" data-action="lesson" data-id="${next.id}">${label}${icon('arrow')}</button>`}</section>
-  ${homeStats()}${homePath()}${recentStrip()}<div class="home-duo">${dailyPrompt()}${homeCategories()}</div>
-  <section class="quick-section" aria-labelledby="quick-title"><div class="section-heading"><h2 id="quick-title">Быстрый доступ</h2></div><div class="quick-grid">${tile('Уроки', `24 урока,<br>${FREE_LESSONS} бесплатно`, 'book', urlFor())}${tile('Промпты', '300 запросов<br>для ИИ', 'prompts', urlFor('prompts'))}${tile('База', 'Инструменты, ниши,<br>клиенты, заказы', 'files', urlFor('base'))}${tile(session?.access?.active ? 'Мой доступ' : 'Полный доступ', session?.access?.active ? 'Всё открыто,<br>навсегда' : priceLabel() ? `${priceLabel()}<br>навсегда` : 'Один платёж,<br>навсегда', 'plane', '#access', 'access')}</div></section>
-  <a class="practice-teaser" href="#practice"><span class="practice-glyph">${icon('play')}</span><span><strong>Практикум</strong><small>Конструктор промпта, квиз, калькулятор оценки и проверка перед сдачей${session?.practice && !session.practice.unlimited ? ` · бесплатно ${session.practice.remaining} из ${session.practice.limit} запусков` : ''}</small></span>${icon('arrow')}</a>
-  <p class="home-note">Одна сделанная страница полезнее десяти прочитанных.</p>${nav('home')}`;
+  <div class="home-grid">${projectCard()}${lessonNowCard()}${homeMaterials()}${homePractice()}</div>
+  ${recentStrip()}<p class="home-note">Одна сделанная страница полезнее десяти прочитанных.</p>${nav('home')}`;
 }
-// Home blocks from the v1.1 design (handoff/CHANGES_v1.0_design.md): stats, course path, prompt of the day, prompt categories.
-function homeStats() {
-  const done = progress.done.length;
-  const modulesDone = modules.filter(m => lessons.filter(l => l.module === m.id).every(l => progress.done.includes(l.id))).length;
-  const p = config.library?.prompts || 300, a = config.library?.articles || 0;
-  const cell = (n, label, tone) => `<div class="stat-tile tone-${tone}"><strong>${n}</strong><span>${label}</span></div>`;
-  return `<section class="home-stats" aria-label="Коротко о курсе">${cell(`${done}<small>/24</small>`, 'уроков пройдено', 'lime')}${cell(`${modulesDone}<small>/${modules.length}</small>`, 'модулей закрыто', 'sky')}${cell(p, 'готовых промптов', 'amber')}${a ? cell(a, 'материалов в базе', 'coral') : ''}</section>`;
+// «Мой проект»: the volumetric site, the four stages and the stage someone opened.
+function projectView(params) {
+  loadProject(); loadExercises();
+  const wanted = params.get('stage');
+  if (project) viewStage = project.stages.some(s => s.id === wanted) ? wanted : project.stages.some(s => s.id === viewStage) ? viewStage : project.stages[project.current].id;
+  return `<header class="page-header">${brand(true)}<div><h1>Мой проект</h1><p>Учебный сайт, который собирается по мере обучения</p></div></header><div class="project-layout" data-learn="project-view">${projectBody()}</div>${nav('project')}`;
 }
-function homePath() {
-  const cards = modules.map(m => {
-    const ids = lessons.filter(l => l.module === m.id).map(l => l.id);
-    const done = ids.filter(id => progress.done.includes(id)).length;
-    const next = ids.find(id => !progress.done.includes(id));
-    return `<button class="path-card hue-${m.id}" data-action="lesson" data-id="${next || ids[0]}"><span class="path-num">${String(m.id).padStart(2, '0')}</span><span class="path-body"><strong>${m.title}</strong><small>${m.description}</small></span><span class="path-foot"><progress max="${ids.length}" value="${done}" aria-label="${m.title}: пройдено ${done} из ${ids.length}"></progress><em>${done}/${ids.length} · уроки ${m.range}</em></span></button>`;
-  }).join('');
-  return `<section class="home-path" aria-labelledby="path-title"><div class="section-heading"><h2 id="path-title">Путь курса</h2><span class="section-meta">4 модуля — от пустой папки до сдачи проекта</span></div><div class="path-grid">${cards}</div></section>`;
+function projectBody() {
+  if (!project) return projectFailed ? `<div class="empty-state">${icon('file')}<h2>Проект не загрузился</h2><p>Проверьте соединение и попробуйте ещё раз.</p><button class="button button-primary" data-action="project-retry">Повторить${icon('arrow')}</button></div>` : '<div class="loading" role="status">Загружаем проект<span></span></div>';
+  const stage = project.stages.find(s => s.id === viewStage) || project.stages[project.current];
+  return `<section class="project-stage-view"><div class="project-art big">${site3d(project.completed, stage.id)}</div>${stageStepper(project, stage.id)}<p class="project-legend">Готово этапов: ${project.completed} из 4. Сайт показывает то, что вы уже сделали. Нажмите на этап, чтобы посмотреть задание.</p></section><div class="stage-slot">${stagePanel(stage, { lessonTitle: id => lessons[id - 1]?.title || '', canOpenLesson })}</div>`;
 }
-function dailyPrompt() {
-  const items = library.prompts?.items;
-  if (!items?.length) return '<section class="daily daily-empty" id="daily" aria-hidden="true"></section>';
-  const item = items[Math.floor(Date.now() / 86400000) % items.length];
-  return `<section class="daily" id="daily" aria-labelledby="daily-title"><span class="eyebrow">ПРОМПТ ДНЯ · №${e(item.id)}</span><h2 id="daily-title">${e(item.title)}</h2><p>${e(item.use || '')}</p><div class="daily-actions"><button class="button button-primary" data-action="prompt" data-id="${e(item.id)}">Открыть промпт${icon('arrow')}</button><button class="copy-quick daily-copy" data-action="quick-copy" data-id="${e(item.id)}" aria-label="Скопировать промпт">${icon('copy')}</button></div></section>`;
-}
-function homeCategories() {
-  const cats = library.prompts?.categories;
-  if (!cats?.length) return '<section class="cats cats-empty" id="cats" aria-hidden="true"></section>';
-  return `<section class="cats" id="cats" aria-labelledby="cats-title"><div class="section-heading"><h2 id="cats-title">Промпты по задачам</h2><span class="section-meta">${cats.length} категорий</span></div><div class="cat-cloud">${cats.slice(0, 12).map((c, i) => `<button class="cat-chip hue-${i % 4 + 1}" data-action="home-category" data-id="${e(c.id)}">${e(c.title)}<em>${c.ids?.length ?? ''}</em></button>`).join('')}<button class="cat-chip cat-all" data-action="home-category" data-id="all">Все промпты${icon('arrow')}</button></div></section>`;
-}
-function refreshHome() {
-  if (route().name !== 'home') return;
-  const d = document.querySelector('#daily'), c = document.querySelector('#cats');
-  if (d) d.outerHTML = dailyPrompt(); if (c) c.outerHTML = homeCategories();
+// Opening a stage only changes what is shown (no hash render, so the layers animate); it never marks the stage.
+function showStage(id) {
+  if (route().name !== 'project') { go('#project?stage=' + id); return; }
+  viewStage = id; history.replaceState(null, '', '#project?stage=' + id);
+  const stage = project?.stages.find(s => s.id === id); if (!stage) return;
+  document.querySelector('.site3d')?.setAttribute('data-focus', id);
+  document.querySelectorAll('.stage-steps li').forEach(li => { const on = li.querySelector('button')?.dataset.id === id; li.classList.toggle('is-selected', on); li.querySelector('button')?.setAttribute('aria-pressed', String(on)); });
+  const slot = document.querySelector('.stage-slot'); if (slot) slot.innerHTML = stagePanel(stage, { lessonTitle: x => lessons[x - 1]?.title || '', canOpenLesson });
 }
 // Shown after the last free lesson: what the buyer gets next, the price, one clear button. No invented reviews or income.
 function afterFree() {
@@ -177,12 +313,12 @@ function afterFree() {
   <button class="button button-primary" data-action="access">${price ? `Открыть весь курс за ${e(price)}` : 'Подробнее о полном доступе'}${icon('arrow')}</button><a class="button button-secondary" href="${urlFor()}">Вернуться к урокам</a><p class="welcome-note">Курс учит навыкам, но не гарантирует заказов и дохода.</p></main>${nav('home')}`;
 }
 let justDone = 0;
-function lessonRow(lesson) {
+function lessonRow(lesson, selected = 0) {
   const done = progress.done.includes(lesson.id);
   const locked = !lesson.free && !session?.access?.active;
-  const active = lesson.id === progress.last && !done && !locked;
-  const note = active ? '<small>Ваш следующий шаг</small>' : done ? '<small>Пройдено</small>' : '';
-  return `<button class="lesson-row ${active ? 'lesson-current' : ''} ${done ? 'lesson-done' : ''} ${locked ? 'lesson-locked' : ''} ${justDone === lesson.id ? 'just-done' : ''}" data-action="lesson" data-id="${lesson.id}"><span class="lesson-number">${String(lesson.id).padStart(2, '0')}</span><span class="lesson-info"><strong>${e(lesson.title)}</strong>${note}</span><span class="lesson-status ${done ? 'done-badge' : ''}">${icon(done ? 'check' : locked ? 'lock' : 'chevron')}</span></button>`;
+  const active = lesson.id === nextLesson()?.id && !done && !locked;
+  const note = active ? '<small>Ваш следующий шаг</small>' : done ? '<small>Пройдено</small>' : locked ? '<small>Полный доступ</small>' : '';
+  return `<button class="lesson-row ${active ? 'lesson-current' : ''} ${done ? 'lesson-done' : ''} ${locked ? 'lesson-locked' : ''} ${selected === lesson.id ? 'is-selected' : ''} ${justDone === lesson.id ? 'just-done' : ''}" data-action="lesson" data-id="${lesson.id}" ${selected === lesson.id ? 'aria-current="true"' : ''}><span class="lesson-number">${pad2(lesson.id)}</span><span class="lesson-info"><strong>${e(lesson.title)}</strong>${note}</span><span class="lesson-status ${done ? 'done-badge' : ''}">${icon(done ? 'check' : locked ? 'lock' : 'chevron')}</span></button>`;
 }
 const plural = (n, one, few, many) => { const a = n % 10, b = n % 100; return b > 10 && b < 20 ? many : a === 1 ? one : a > 1 && a < 5 ? few : many; };
 const matches = (query, ...parts) => !query || parts.join(' ').toLocaleLowerCase('ru').includes(query);
@@ -191,6 +327,49 @@ function libraryNotice(kind) {
   if (library[kind]) return '';
   return '<div class="loading" role="status">Загружаем<span></span></div>';
 }
+function emptySearch() { return `<div class="empty-state">${icon('search')}<h2>Пока ничего не нашлось</h2><p>Попробуйте другое слово или номер.</p></div>`; }
+
+// ---- «Уроки»: the programme on the left, the chosen lesson on the right (on a phone a tap opens the lesson) ----
+let lessonSearch = '';
+function lessonListBody(selected) {
+  const query = lessonSearch.trim().toLocaleLowerCase('ru');
+  return modules.map(m => {
+    const rows = lessons.filter(l => l.module === m.id && matches(query, l.title, l.id, l.outcome));
+    if (!rows.length) return '';
+    const done = lessons.filter(l => l.module === m.id && progress.done.includes(l.id)).length;
+    const meta = m.end <= FREE_LESSONS ? '<span class="free-label">Бесплатно после подписки</span>' : session?.access?.active ? `${done} из ${m.end - m.start + 1}` : `${icon('lock')}Полный доступ`;
+    return `<section class="module-section hue-${m.id}">${heading(m.range, m.title, meta)}<div class="lesson-list">${rows.map(l => lessonRow(l, selected)).join('')}</div></section>`;
+  }).join('') || emptySearch();
+}
+const STAGE_TITLE = { structure: 'Структура', design: 'Дизайн', content: 'Контент', publish: 'Публикация' };
+function lessonPanel(id) {
+  const l = lessons[id - 1]; if (!l) return '';
+  const m = modules.find(x => x.id === l.module);
+  const done = progress.done.includes(id); const locked = !canOpenLesson(id);
+  const tasks = (exList || []).filter(x => x.lesson === id);
+  const stage = tasks.find(x => x.stage)?.stage;
+  const status = done ? `<span class="chip-status is-done">${icon('check')}Пройден</span>` : locked ? `<span class="chip-status">${icon('lock')}Полный доступ</span>` : id === nextLesson()?.id ? '<span class="chip-status is-next">Следующий шаг</span>' : '<span class="chip-status">Не начат</span>';
+  const taskRows = tasks.length ? `<ul class="panel-tasks">${tasks.map(x => `<li><a href="#practice?ex=${x.id}"><span class="panel-task-type">${e(exerciseTypeName(x.type))}</span><strong>${e(x.title)}</strong><small>${e(x.skill)}</small></a>${x.passed ? `<span class="chip-status is-done">${icon('check')}Засчитано</span>` : !x.open ? icon('lock') : ''}</li>`).join('')}</ul>` : '<p class="panel-muted">В этом уроке задание — чек-лист «Готово, когда» внутри урока.</p>';
+  return `<article class="lesson-panel-card hue-${l.module}" aria-labelledby="lesson-panel-title"><div class="panel-top"><span class="eyebrow">Урок ${pad2(id)} / 24 · ${e(m.title)}</span>${starButton('lesson', id, l.title, 'fav-inline')}</div><h2 id="lesson-panel-title">${e(l.title)}</h2>${status}<div class="panel-outcome">${icon('target')}<p><span>Чему научитесь</span>${e(l.outcome)}</p></div><h3>Задание к уроку</h3>${taskRows}${stage ? `<p class="panel-stage">Этап учебного проекта: <a href="#project?stage=${stage}">${STAGE_TITLE[stage]}</a></p>` : ''}<div class="panel-actions"><button class="button button-primary" data-action="lesson-open" data-id="${id}">${locked ? 'Открыть доступ' : done ? 'Открыть ещё раз' : progress.done.length ? 'Продолжить' : 'Открыть урок'}${icon(locked ? 'lock' : 'arrow')}</button></div>${locked ? `<p class="panel-muted">Уроки ${pad2(FREE_LESSONS + 1)}–24 открываются после покупки${priceLabel() ? ` · ${e(priceLabel())} навсегда` : ''}.</p>` : ''}</article>`;
+}
+function lessonsView(params) {
+  loadExercises();
+  const selected = Number(params.get('id')) || nextLesson()?.id || 1;
+  return `<header class="page-header">${brand(true)}<div><h1>Уроки</h1><p>24 урока · 4 модуля · первые ${FREE_LESSONS} бесплатно после подписки</p></div></header><div class="split-layout lessons-layout"><div class="split-main"><div class="catalogue-tools"><label class="search-box">${icon('search')}<input type="search" id="lesson-search" aria-label="Найти урок" placeholder="Найти урок" value="${e(lessonSearch)}" autocomplete="off"></label></div><div id="lesson-results">${lessonListBody(selected)}</div></div><aside class="split-side lesson-panel" data-learn="lesson-panel" data-id="${selected}" aria-label="Выбранный урок">${lessonPanel(selected)}</aside></div>${session?.access?.active ? '' : accessBanner()}${nav('lessons')}`;
+}
+function accessBanner() { return `<button class="access-banner" data-action="access"><span class="access-icon">${icon('lock')}</span><span><strong>Откройте весь Vibentry</strong><small>Уроки ${pad2(FREE_LESSONS + 1)}–24, 300 промптов и вся база${priceLabel() ? ' · ' + priceLabel() + ' навсегда' : ''}</small></span>${icon('arrow')}</button>`; }
+
+// ---- «Материалы»: catalogue on the left, a permanent preview on the right (a bottom sheet on a phone) ----
+const TABS = [['templates', 'Шаблоны'], ['prompts', 'Промпты'], ['base', 'База'], ['terms', 'Термины'], ['favorites', 'Избранное']];
+const PLACEHOLDER = { prompts: 'Найти промпт', templates: 'Найти шаблон', base: 'Найти материал', terms: 'Найти термин', favorites: 'Найти в избранном' };
+const MAT_KIND = { prompt: 'Промпт', resource: 'Шаблон', article: 'База', term: 'Термин', lesson: 'Урок' };
+let selectedMat = null; let highlightTerm = '';
+const fragments = new Map();
+const matOpen = (kind, id) => kind === 'term' ? true : kind === 'lesson' ? canOpenLesson(Number(id)) : kind === 'article' ? !!library.articles?.items.find(a => a.id === id)?.free || !!session?.access?.active : !!session?.access?.active;
+function matCard(kind, id, title, text, { number = '', fav = true } = {}) {
+  const open = matOpen(kind, id); const on = selectedMat && selectedMat.kind === kind && String(selectedMat.id) === String(id);
+  return `<div class="mat-card ${on ? 'is-selected' : ''} ${open ? '' : 'is-locked'}"><button class="mat-card-main" data-action="mat-select" data-kind="${kind}" data-id="${e(String(id))}" aria-pressed="${!!on}"><span class="mat-type">${number ? `<b>${e(number)}</b>` : ''}${MAT_KIND[kind]}${open ? '' : ` · ${icon('lock')}полный доступ`}</span><strong>${e(title)}</strong>${text ? `<small>${e(text)}</small>` : ''}</button>${fav && kind !== 'term' ? starButton(kind, id, title, 'fav-inline') : ''}</div>`;
+}
 function promptsBody(query) {
   const notice = libraryNotice('prompts'); if (notice) return notice;
   const { categories, items } = library.prompts;
@@ -198,47 +377,29 @@ function promptsBody(query) {
   const byId = new Map(items.map(item => [item.id, item]));
   const recent = readLocal(RECENT_KEY, []).filter(id => byId.has(id));
   const special = [['fav', 'Избранное', favIds('prompt').length], ['recent', 'Недавние', recent.length]].filter(([, , n]) => n > 0).map(([id, label, n]) => `<button class="chip chip-special ${promptCategory === id ? 'selected' : ''}" data-action="prompt-category" data-id="${id}">${id === 'fav' ? icon('star') : icon('clock')}${label} <span>${n}</span></button>`).join('');
-  const chips = `<div class="chips" role="group" aria-label="Категории промптов"><button class="chip ${promptCategory === 'all' ? 'selected' : ''}" data-action="prompt-category" data-id="all">Все ${items.length}</button>${special}${categories.map((c, i) => `<button class="chip ${promptCategory === c.id ? 'selected' : ''}" data-action="prompt-category" data-id="${e(c.id)}">${e(c.title)} <span>${c.ids.length}</span></button>`).join('')}</div>`;
+  const chips = `<div class="chips" role="group" aria-label="Категории промптов"><button class="chip ${promptCategory === 'all' ? 'selected' : ''}" data-action="prompt-category" data-id="all">Все ${items.length}</button>${special}${categories.map(c => `<button class="chip ${promptCategory === c.id ? 'selected' : ''}" data-action="prompt-category" data-id="${e(c.id)}">${e(c.title)} <span>${c.ids.length}</span></button>`).join('')}</div>`;
   const ids = promptCategory === 'fav' ? favIds('prompt') : promptCategory === 'recent' ? recent : categories.find(c => c.id === promptCategory)?.ids;
   const chosen = promptCategory === 'all' || !ids ? items : ids.map(id => byId.get(id)).filter(Boolean);
   const all = chosen.filter(item => matches(query, item.id, item.title, item.use));
   const rows = all.slice(0, promptLimit); const rest = all.length - rows.length;
-  const locked = !session?.access?.active;
-  const star = item => starButton('prompt', item.id, item.title);
   const more = rest > 0 ? `<button class="button button-secondary more-button" data-action="more-prompts">Показать ещё ${Math.min(30, rest)} · осталось ${rest}</button>` : '';
-  const emptyFav = promptCategory === 'fav' && !all.length ? `<div class="empty-state">${icon('star')}<h2>Здесь будут избранные промпты</h2><p>Нажмите звёздочку рядом с промптом, чтобы он всегда был под рукой.</p></div>` : '';
-  return `${chips}${emptyFav}<div class="prompt-list">${rows.map(item => `<div class="prompt-item">${star(item)}<button class="prompt-card ${locked ? 'is-locked' : ''}" data-action="prompt" data-id="${e(item.id)}"><span class="prompt-number">${e(item.id)}</span><span class="prompt-info"><strong>${e(item.title)}</strong><small>${e(item.use)}</small></span></button><button class="copy-quick ${locked ? 'is-locked' : ''}" data-action="quick-copy" data-id="${e(item.id)}" aria-label="${locked ? 'Откроется после покупки' : 'Скопировать промпт ' + e(item.id)}">${icon(locked ? 'lock' : 'copy')}</button></div>`).join('') || (emptyFav ? '' : emptySearch())}</div>${more}`;
+  return `${chips}<div class="mat-list">${rows.map(item => matCard('prompt', item.id, item.title, item.use, { number: '№' + item.id })).join('') || emptySearch()}</div>${more}`;
+}
+function templatesBody(query) {
+  const rows = materials.filter(m => matches(query, m.title, m.description));
+  return rows.length ? `<p class="practice-intro">Готовые заготовки из уроков: заполните своими данными и пользуйтесь в работе.</p><div class="mat-list">${rows.map(m => matCard('resource', m.id, m.title, m.description)).join('')}</div>` : emptySearch();
 }
 function baseBody(query) {
   const notice = libraryNotice('articles'); if (notice) return notice;
   const items = library.articles.items.filter(a => matches(query, a.title, a.description, a.groupTitle));
   const groups = [...new Set(library.articles.items.map(a => a.group))];
-  const locked = a => !a.free && !session?.access?.active;
   const sections = groups.map(group => {
     const rows = items.filter(a => a.group === group);
-    if (!rows.length) return '';
-    return `<section class="module-section">${heading('', e(rows[0].groupTitle), `${rows.length} ${plural(rows.length, 'материал', 'материала', 'материалов')}`)}<div class="lesson-list">${rows.map(a => `<button class="lesson-row base-row ${locked(a) ? 'lesson-locked' : ''}" data-action="article" data-id="${e(a.id)}"><span class="base-icon">${icon('file')}</span><span class="lesson-info"><strong>${e(a.title)}</strong><small>${a.free ? 'Открыт для всех · ' : ''}${e(a.description || '')}</small></span><span class="lesson-status">${icon(locked(a) ? 'lock' : 'chevron')}</span></button>`).join('')}</div></section>`;
+    return rows.length ? `<section class="module-section">${heading('', e(rows[0].groupTitle), `${rows.length} ${plural(rows.length, 'материал', 'материала', 'материалов')}`)}<div class="mat-list">${rows.map(a => matCard('article', a.id, a.title, (a.free ? 'Открыт для всех · ' : '') + (a.description || ''))).join('')}</div></section>` : '';
   }).join('');
-  const templates = materials.filter(m => matches(query, m.title, m.description));
-  const templateBlock = templates.length ? `<section class="module-section">${heading('', 'Шаблоны из уроков', `${templates.length} ${plural(templates.length, 'шаблон', 'шаблона', 'шаблонов')}`)}<div class="lesson-list">${templates.map(m => `<button class="lesson-row base-row ${session?.access?.active ? '' : 'lesson-locked'}" data-action="resource" data-id="${e(m.id)}"><span class="base-icon">${icon('copy')}</span><span class="lesson-info"><strong>${e(m.title)}</strong><small>${e(m.description)}</small></span><span class="lesson-status">${icon(session?.access?.active ? 'chevron' : 'lock')}</span></button>`).join('')}</div></section>` : '';
-  const termsLink = matches(query, 'Термины', 'словарь') ? `<section class="module-section">${heading('', 'Словарь', 'для всех')}<div class="lesson-list"><a class="lesson-row base-row" href="${urlFor('terms')}"><span class="base-icon">${icon('book')}</span><span class="lesson-info"><strong>Термины</strong><small>Простые объяснения слов из уроков</small></span><span class="lesson-status">${icon('chevron')}</span></a></div></section>` : '';
-  return (termsLink + sections + templateBlock) || emptySearch();
-}
-function catalogueBody(tab) {
-  const query = search.trim().toLocaleLowerCase('ru');
-  if (tab === 'prompts') return promptsBody(query);
-  if (tab === 'base') return baseBody(query);
-  if (tab === 'terms') return termsBody(query);
-  if (tab === 'favorites') return favoritesBody(query);
-  return modules.map(m => {
-    const rows = lessons.filter(l => l.module === m.id && matches(query, l.title, l.id));
-    if (!rows.length) return '';
-    const meta = m.end <= FREE_LESSONS ? '<span class="free-label">Бесплатно после подписки</span>' : `${rows.length} ${plural(rows.length, 'урок', 'урока', 'уроков')}`;
-    return `<section class="module-section hue-${m.id}">${heading(m.range, m.title, meta)}<div class="lesson-list">${rows.map(lessonRow).join('')}</div></section>`;
-  }).join('') || emptySearch();
+  return sections || emptySearch();
 }
 // «Термины»: open to everyone; the term from a lesson (#materials?tab=terms&term=id) is highlighted.
-let highlightTerm = '';
 function termsBody(query) {
   const rows = TERMS.filter(t => matches(query, t.title, t.text));
   const sections = GROUPS.map(([id, title]) => { const items = rows.filter(t => t.group === id); return items.length ? `<section class="module-section">${heading('', title, `${items.length} ${plural(items.length, 'термин', 'термина', 'терминов')}`)}<div class="term-list">${items.map(t => `<article class="term-card ${highlightTerm === t.id ? 'is-highlighted' : ''}" id="term-${t.id}"><h3>${e(t.title)}</h3><p>${e(t.text)}</p></article>`).join('')}</div></section>` : ''; }).join('');
@@ -249,26 +410,89 @@ function openTerm(id) {
   modal(e(t.title), `<p>${e(t.text)}</p><a class="button button-secondary" href="${urlFor('terms')}&term=${t.id}" data-action="all-terms">Все термины${icon('arrow')}</a>`);
 }
 function favoritesBody(query) {
-  if (!favorites.length) return `<div class="empty-state">${icon('star')}<h2>Здесь будут ваши закладки</h2><p>Нажмите звёздочку у промпта, в шапке урока или материала базы — он появится здесь. Закладки хранятся в вашем аккаунте Telegram, их видно на любом устройстве.</p><a class="button button-secondary" href="${urlFor('prompts')}">К промптам${icon('arrow')}</a></div>`;
-  const open = f => session?.access?.active || (f.kind === 'lesson' && lessons.find(l => l.id === f.id)?.free) || (f.kind === 'article' && library.articles?.items.find(a => a.id === f.id)?.free);
-  const sections = [['lesson', 'Уроки'], ['prompt', 'Промпты'], ['article', 'Материалы базы']].map(([kind, title]) => {
+  if (!favorites.length) return `<div class="empty-state">${icon('star')}<h2>Здесь будут ваши закладки</h2><p>Нажмите звёздочку у промпта, шаблона, урока или материала базы — он появится здесь. Закладки хранятся в вашем аккаунте Telegram, их видно на любом устройстве.</p><a class="button button-secondary" href="${urlFor('templates')}">К шаблонам${icon('arrow')}</a></div>`;
+  const sections = [['lesson', 'Уроки'], ['prompt', 'Промпты'], ['resource', 'Шаблоны'], ['article', 'Материалы базы']].map(([kind, title]) => {
     const rows = favorites.filter(f => f.kind === kind && matches(query, f.title, f.id));
-    if (!rows.length) return '';
-    return `<section class="module-section">${heading('', title, String(rows.length))}<div class="lesson-list">${rows.map(f => `<div class="fav-row"><button class="lesson-row base-row ${open(f) ? '' : 'lesson-locked'}" data-action="${kind}" data-id="${e(String(f.id))}"><span class="base-icon">${icon(KIND[kind][1])}</span><span class="lesson-info"><strong>${kind === 'article' ? '' : e(String(f.id).padStart(kind === 'lesson' ? 2 : 3, '0')) + ' · '}${e(f.title)}</strong><small>${open(f) ? KIND[kind][0] : 'Откроется после покупки'}</small></span><span class="lesson-status">${icon(open(f) ? 'chevron' : 'lock')}</span></button>${starButton(kind, f.id, f.title, 'fav-inline')}</div>`).join('')}</div></section>`;
+    return rows.length ? `<section class="module-section">${heading('', title, String(rows.length))}<div class="mat-list">${rows.map(f => matCard(kind, f.id, f.title, '', { number: kind === 'lesson' ? pad2(f.id) : kind === 'prompt' ? '№' + f.id : '' })).join('')}</div></section>` : '';
   }).join('');
   return sections || emptySearch();
 }
-function emptySearch() { return `<div class="empty-state">${icon('search')}<h2>Пока ничего не нашлось</h2><p>Попробуйте другое слово или номер.</p></div>`; }
-// «Термины» moved into «База» (v1.1): the tab still has its own address for links from lessons, but no segment.
-const TABS = [['lessons', 'Уроки'], ['prompts', 'Промпты'], ['base', 'База'], ['favorites', 'Избранное']];
-const PLACEHOLDER = { lessons: 'Найти урок', prompts: 'Найти промпт', base: 'Найти материал', terms: 'Найти термин', favorites: 'Найти в избранном' };
+function catalogueBody(tab) {
+  const query = search.trim().toLocaleLowerCase('ru');
+  if (tab === 'prompts') return promptsBody(query);
+  if (tab === 'base') return baseBody(query);
+  if (tab === 'terms') return termsBody(query);
+  if (tab === 'favorites') return favoritesBody(query);
+  return templatesBody(query);
+}
+// The first card of the current list is previewed until something else is chosen.
+function defaultMat(tab) {
+  if (tab === 'templates') return materials[0] && { kind: 'resource', id: materials[0].id };
+  if (tab === 'prompts') return library.prompts?.items?.[0] && { kind: 'prompt', id: library.prompts.items[0].id };
+  if (tab === 'base') return library.articles?.items?.[0] && { kind: 'article', id: library.articles.items[0].id };
+  if (tab === 'favorites') return favorites[0] && { kind: favorites[0].kind, id: favorites[0].id };
+  return null;
+}
+function matInfo(kind, id) {
+  if (kind === 'prompt') { const p = library.prompts?.items.find(x => x.id === id); const cat = library.prompts?.categories.find(c => c.ids.includes(id)); return p && { title: p.title, purpose: p.use, parts: cat ? [`Категория: ${cat.title}`, 'Квадратные скобки — места для ваших данных'] : [], open: () => openPrompt(id) }; }
+  if (kind === 'resource') { const m = materials.find(x => x.id === id); return m && { title: m.title, purpose: m.description, parts: [`Из урока ${pad2(m.lesson)} · ${lessons[m.lesson - 1].title}`, 'Текст для копирования и заполнения'], lesson: m.lesson }; }
+  if (kind === 'article') { const a = library.articles?.items.find(x => x.id === id); return a && { title: a.title, purpose: a.description, group: a.groupTitle, parts: a.outline || [] }; }
+  if (kind === 'lesson') { const l = lessons[Number(id) - 1]; return l && { title: `${pad2(l.id)} · ${l.title}`, purpose: l.outcome, parts: [modules.find(m => m.id === l.module).title] }; }
+  if (kind === 'term') { const t = TERMS.find(x => x.id === id); return t && { title: t.title, purpose: t.text, parts: [] }; }
+  return null;
+}
+// A small allowed fragment: only for what this account can open (the server checks access again).
+async function loadFragment(kind, id) {
+  const key = `${kind}:${id}`; if (fragments.has(key) || !matOpen(kind, id) || !['prompt', 'resource'].includes(kind) || config.preview) return;
+  fragments.set(key, null);
+  try {
+    const response = await fetch(`/api/${kind === 'prompt' ? 'prompts' : 'resources'}/${encodeURIComponent(id)}`, { headers: { 'X-Telegram-Init-Data': tg?.initData || '' } });
+    if (!response.ok) throw new Error();
+    const { text } = await response.json(); fragments.set(key, String(text || ''));
+  } catch { fragments.delete(key); }
+  const pane = document.querySelector('[data-learn="mat-preview"]');
+  if (pane && selectedMat && `${selectedMat.kind}:${selectedMat.id}` === key) pane.innerHTML = matPreviewInner();
+  const sheet = overlay.querySelector('.mat-preview'); if (sheet && sheet.dataset.key === key) sheet.outerHTML = matPreviewInner();
+}
+function matPreviewInner(sel = selectedMat) {
+  if (!sel) return `<div class="mat-preview empty">${art3d('folder')}<p>Выберите материал слева, чтобы посмотреть, что в нём.</p></div>`;
+  const info = matInfo(sel.kind, sel.id); if (!info) return '<div class="mat-preview empty"><p>Материал не найден.</p></div>';
+  const open = matOpen(sel.kind, sel.id); const key = `${sel.kind}:${sel.id}`;
+  loadFragment(sel.kind, sel.id);
+  const text = fragments.get(key);
+  const fragment = sel.kind === 'term' ? '' : !open ? `<div class="mat-fragment is-locked">${icon('lock')}<p>Содержимое откроется после покупки. Здесь видно только назначение и состав.</p></div>` : text ? `<div class="mat-fragment"><span class="eyebrow">Фрагмент</span><pre>${e(text.slice(0, 320))}${text.length > 320 ? '…' : ''}</pre></div>` : ['prompt', 'resource'].includes(sel.kind) && !config.preview ? '<div class="mat-fragment"><div class="loading" role="status">Загружаем фрагмент<span></span></div></div>' : '';
+  const action = sel.kind === 'term' ? `<a class="button button-secondary" href="${urlFor('terms')}&term=${sel.id}" data-action="all-terms">Все термины${icon('arrow')}</a>` : !open ? `<button class="button button-primary" data-action="access">Открыть полный доступ${priceLabel() ? ' · ' + e(priceLabel()) : ''}${icon('arrow')}</button>` : `<button class="button button-primary" data-action="mat-open" data-kind="${sel.kind}" data-id="${e(String(sel.id))}">${sel.kind === 'lesson' ? 'Открыть урок' : sel.kind === 'article' ? 'Читать' : 'Открыть и скопировать'}${icon('arrow')}</button>`;
+  const artKind = { prompt: 'braces', resource: 'brief', article: 'template', lesson: 'checklist', term: 'brief' }[sel.kind];
+  return `<div class="mat-preview" data-key="${e(key)}"><div class="mat-preview-head"><span class="mat-preview-art">${art3d(artKind)}</span><div><span class="eyebrow">${MAT_KIND[sel.kind]}${info.group ? ' · ' + e(info.group) : ''}</span><h2>${e(info.title)}</h2></div>${sel.kind !== 'term' ? starButton(sel.kind, sel.id, info.title, 'fav-inline') : ''}</div><div class="mat-section"><h3>Назначение</h3><p>${e(info.purpose || '')}</p></div>${info.parts.length ? `<div class="mat-section"><h3>Состав</h3><ul>${info.parts.map(p => `<li>${e(p)}</li>`).join('')}</ul></div>` : ''}${fragment}<div class="mat-actions">${action}${info.lesson ? `<a class="text-link" href="#lesson?id=${info.lesson}" data-action="lesson" data-id="${info.lesson}">Урок ${pad2(info.lesson)}${icon('arrow')}</a>` : ''}</div></div>`;
+}
+function selectMat(kind, id) {
+  selectedMat = { kind, id: kind === 'lesson' ? Number(id) : id };
+  if (wide()) {
+    document.querySelectorAll('.mat-card').forEach(card => { const b = card.querySelector('.mat-card-main'); const on = b?.dataset.kind === kind && b?.dataset.id === String(id); card.classList.toggle('is-selected', on); b?.setAttribute('aria-pressed', String(on)); });
+    const pane = document.querySelector('[data-learn="mat-preview"]'); if (pane) pane.innerHTML = matPreviewInner();
+  } else {
+    const info = matInfo(kind, id);
+    modal(e(info?.title || 'Материал'), matPreviewInner());
+  }
+}
+function openMat(kind, id) {
+  closeModal(false);
+  if (kind === 'prompt') openPrompt(id);
+  else if (kind === 'resource') openResource(id);
+  else if (kind === 'article') go('#article?id=' + id);
+  else if (kind === 'lesson') go('#lesson?id=' + id);
+}
 function catalogue(params) {
-  const tab = [...TABS.map(([id]) => id), 'terms'].includes(params.get('tab')) ? params.get('tab') : 'lessons';
+  const wanted = params.get('tab');
+  if (wanted === 'lessons') { setTimeout(() => go('#lessons'), 0); return ''; }
+  const tab = TABS.some(([id]) => id === wanted) ? wanted : 'templates';
+  if (catalogueTab !== tab) selectedMat = null;
   catalogueTab = tab; highlightTerm = tab === 'terms' ? params.get('term') || '' : '';
   if (highlightTerm) setTimeout(() => document.querySelector(`#term-${CSS.escape(highlightTerm)}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }), 60);
   loadLibrary(tab);
-  const banner = session?.access?.active ? '' : `<button class="access-banner" data-action="access"><span class="access-icon">${icon('lock')}</span><span><strong>Откройте весь Vibentry</strong><small>Уроки ${String(FREE_LESSONS + 1).padStart(2, '0')}–24, 300 промптов и вся база${priceLabel() ? ' · ' + priceLabel() + ' навсегда' : ''}</small></span>${icon('arrow')}</button>`;
-  return `<header class="page-header">${brand(true)}<div><h1>Материалы</h1><p>Всё, что нужно для вашего сайта</p></div></header><div class="catalogue-tools"><nav class="segments" aria-label="Тип материалов">${TABS.map(([id, label]) => { const on = tab === id || (tab === 'terms' && id === 'base'); return `<a href="${urlFor(id)}" class="${on ? 'selected' : ''}" ${on ? 'aria-current="page"' : ''}>${label}</a>`; }).join('')}</nav><label class="search-box">${icon('search')}<input type="search" id="material-search" aria-label="${PLACEHOLDER[tab]}" placeholder="${PLACEHOLDER[tab]}" value="${e(search)}" autocomplete="off"></label></div><div id="catalogue-results">${catalogueBody(tab)}</div>${banner}${nav('materials')}`;
+  if (!selectedMat && tab !== 'terms') selectedMat = defaultMat(tab);
+  const side = tab === 'terms' ? '' : `<aside class="split-side" aria-label="Предпросмотр"><div class="mat-preview-pane" data-learn="mat-preview">${matPreviewInner()}</div></aside>`;
+  return `<header class="page-header">${brand(true)}<div><h1>Материалы</h1><p>Шаблоны, промпты и база — всё, что нужно для вашего сайта</p></div></header><div class="split-layout materials-layout ${side ? '' : 'is-single'}"><div class="split-main"><div class="catalogue-tools"><nav class="filter-row" aria-label="Тип материалов">${TABS.map(([id, label]) => `<a href="${urlFor(id)}" class="chip ${tab === id ? 'selected' : ''}" ${tab === id ? 'aria-current="page"' : ''}>${id === 'favorites' ? icon('star') : ''}${label}</a>`).join('')}</nav><label class="search-box">${icon('search')}<input type="search" id="material-search" aria-label="${PLACEHOLDER[tab]}" placeholder="${PLACEHOLDER[tab]}" value="${e(search)}" autocomplete="off"></label></div><div id="catalogue-results">${catalogueBody(tab)}</div></div>${side}</div>${session?.access?.active ? '' : accessBanner()}${nav('materials')}`;
 }
 function errorPanel() { return `<section class="empty-state">${icon('file')}<h2>Материал не загрузился</h2><p>Проверьте соединение и попробуйте ещё раз.</p><button class="button button-primary" data-action="retry">Повторить ${icon('arrow')}</button></section>`; }
 function copyBlocks(markdown) { const { html, codes } = renderMarkdown(markdown); return { html, codes }; }
@@ -290,7 +514,7 @@ function lessonHtml(id, meta, content) {
   const footnote = !upcoming ? '<p class="reader-footnote">Вы прошли весь курс. Пора применять знания!</p>'
     : id === FREE_LESSONS && nextLocked ? `<a class="next-lesson" href="#next"><span><small>Бесплатная часть пройдена</small><strong>Что дальше в курсе</strong></span>${icon('arrow')}</a>`
     : `<button class="next-lesson ${nextLocked ? 'is-locked' : ''}" data-action="lesson" data-id="${upcoming.id}"><span><small>Следующий урок</small><strong>${String(upcoming.id).padStart(2, '0')} · ${e(upcoming.title)}</strong></span>${icon(nextLocked ? 'lock' : 'arrow')}</button>`;
-  return `<header class="reader-header"><a href="${urlFor()}" class="back-link">${icon('back')}Все уроки</a>${brand(true)}</header><article class="lesson-article"><div class="reader-meta"><span class="eyebrow">УРОК ${String(id).padStart(2, '0')} / 24</span><span class="reader-tools"><span class="free-label">${meta.free ? 'Бесплатно' : 'Полный доступ'}</span>${starButton('lesson', id, meta.title, 'fav-inline')}</span></div><h1>${e(meta.title)}</h1><div class="outcome">${icon('target')}<p><span>РЕЗУЛЬТАТ УРОКА</span>${e(content.outcome)}</p></div><div class="article-body">${bodyHtml}</div>${practice}<button class="button button-primary finish-button" data-action="finish" ${checked ? '' : 'disabled'}>${progress.done.includes(id) ? 'К следующему шагу' : 'Завершить урок'}${icon('arrow')}</button>${footnote}</article>`;
+  return `<header class="reader-header"><a href="${urlFor()}" class="back-link">${icon('back')}Все уроки</a>${brand(true)}</header><article class="lesson-article"><div class="reader-meta"><span class="eyebrow">УРОК ${String(id).padStart(2, '0')} / 24</span><span class="reader-tools"><span class="free-label">${meta.free ? 'Бесплатно' : 'Полный доступ'}</span>${starButton('lesson', id, meta.title, 'fav-inline')}</span></div><h1>${e(meta.title)}</h1><div class="outcome">${icon('target')}<p><span>РЕЗУЛЬТАТ УРОКА</span>${e(content.outcome)}</p></div><details class="reader-toc" ${wide() ? 'open' : ''}><summary>Содержание урока</summary><ol></ol></details><div class="article-body">${bodyHtml}</div><section class="lesson-exercises" id="lesson-practice" data-lesson="${id}" aria-label="Практика урока"></section>${practice}<button class="button button-primary finish-button" data-action="finish" ${checked ? '' : 'disabled'}>${progress.done.includes(id) ? 'К следующему шагу' : 'Завершить урок'}${icon('arrow')}</button>${footnote}</article>`;
 }
 async function reader(id, epoch) {
   const meta = lessons.find(l => l.id === id);
@@ -309,6 +533,24 @@ async function reader(id, epoch) {
   app.innerHTML = lessonHtml(id, meta, content); pushOpened('lesson', id, meta.title); track('lesson_open', id);
   window.scrollTo({ top: 0, behavior: 'instant' });
   wireChecklist(id); linkTerms(app.querySelectorAll('.lesson-article .article-body, .lesson-article .practice-body')); restoreScroll(id);
+  wireToc(); loadExercises().then(() => mountLessonExercises(id));
+}
+// «Содержание»: the lesson's own headings; buttons scroll (the hash stays the lesson's address).
+function wireToc() {
+  const list = app.querySelector('.reader-toc ol'); if (!list) return;
+  const heads = [...app.querySelectorAll('.lesson-article > .article-body h2, .lesson-article > .article-body h3')];
+  heads.forEach((h, i) => { h.id = 'sec-' + i; });
+  list.innerHTML = heads.map((h, i) => `<li><button data-action="toc" data-id="sec-${i}">${e(h.textContent)}</button></li>`).join('') + '<li class="toc-practice" hidden><button data-action="toc" data-id="lesson-practice">Практика урока</button></li><li><button data-action="toc" data-id="task-done">Проверьте себя</button></li>';
+  if (!heads.length) app.querySelector('.reader-toc')?.remove();
+}
+// Объяснение и пример — the lesson text; задание и проверка — the exercises of this lesson, right after it.
+function mountLessonExercises(id) {
+  const box = app.querySelector(`.lesson-exercises[data-lesson="${id}"]`); if (!box || readerId !== id) return;
+  const list = (exList || []).filter(x => x.lesson === id);
+  if (!list.length) { box.remove(); return; }
+  app.querySelector('.toc-practice')?.removeAttribute('hidden');
+  box.innerHTML = `<span class="eyebrow">Практика урока</span><h2>Попробуйте сами</h2><p>Задание проверяется сразу: вы увидите, что уже получилось и что стоит дописать. Результат сохраняется в вашем аккаунте.</p>${list.map(x => exerciseSlot(x.id)).join('')}`;
+  list.forEach(x => ensureExercise(x.id));
 }
 async function articleReader(id, epoch) {
   const info = library.articles?.items.find(a => a.id === id);
@@ -364,7 +606,7 @@ function render() {
   closeModal(false);
   if (name === 'lesson') { try { tg?.BackButton.show(); } catch {} reader(Number(params.get('id')), epoch); }
   else if (name === 'article') { try { tg?.BackButton.show(); } catch {} articleReader(params.get('id') || '', epoch); }
-  else { try { if (name === 'home') tg?.BackButton.hide(); else tg?.BackButton.show(); } catch {} app.innerHTML = name === 'materials' ? catalogue(params) : name === 'profile' ? profile() : name === 'admin' ? adminScreen() : name === 'practice' ? practiceView(params) : name === 'next' && !session?.access?.active ? afterFree() : home(); if (name === 'home' && !library.prompts) loadLibrary('prompts').then(refreshHome); if (name === 'buy') openAccess(params.get('promo') || session?.personalOffer?.code || null); if (name === 'practice' && practiceStarted.has(params.get('id'))) mountPractice(app, { copy }); }
+  else { try { if (name === 'home') tg?.BackButton.hide(); else tg?.BackButton.show(); } catch {} app.innerHTML = name === 'materials' ? catalogue(params) : name === 'lessons' ? lessonsView(params) : name === 'project' ? projectView(params) : name === 'profile' ? profile() : name === 'admin' ? adminScreen() : name === 'practice' ? practiceView(params) : name === 'next' && !session?.access?.active ? afterFree() : home(); if (name === 'buy') openAccess(params.get('promo') || session?.personalOffer?.code || null); if (name === 'practice' && practiceStarted.has(params.get('id'))) mountPractice(app, { copy }); }
   window.scrollTo({ top: 0, behavior: 'instant' });
 }
 function toast(message) { const box = document.querySelector('#toast'); box.textContent = message; box.classList.add('visible'); clearTimeout(toastTimer); toastTimer = setTimeout(() => box.classList.remove('visible'), 3000); }
@@ -466,7 +708,23 @@ document.addEventListener('click', event => {
   if (!target) return;
   event.preventDefault();
   const action = target.dataset.action;
-  if (action === 'lesson') { const lesson = lessons.find(l => l.id === Number(target.dataset.id)); if (!lesson || (!lesson.free && !session?.access?.active)) return openAccess(); go(`#lesson?id=${lesson.id}`); }
+  // In «Уроки» on a computer a tap in the programme chooses the lesson for the panel; the panel button opens it.
+  if (action === 'lesson' && route().name === 'lessons' && wide() && target.closest('.split-main')) { selectLesson(Number(target.dataset.id)); return; }
+  if (action === 'lesson' || action === 'lesson-open') { const lesson = lessons.find(l => l.id === Number(target.dataset.id)); if (!lesson || (!lesson.free && !session?.access?.active)) return openAccess(); go(`#lesson?id=${lesson.id}`); }
+  if (action === 'stage') showStage(target.dataset.id);
+  if (action === 'project-retry') { projectFailed = false; refreshLearning(); loadProject(true); }
+  if (action === 'mat-select') selectMat(target.dataset.kind, target.dataset.id);
+  if (action === 'mat-open') openMat(target.dataset.kind, target.dataset.id);
+  if (action === 'toc') { const node = document.getElementById(target.dataset.id); node?.scrollIntoView({ block: 'start', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }); }
+  if (action === 'ex-load') ensureExercise(target.dataset.id, true);
+  if (action === 'ex-check') checkExercise(target.dataset.id);
+  const exId = target.closest('[data-ex]')?.dataset.ex;
+  if (exId && action === 'ex-add') editExercise(exId, a => { a.blocks.push(target.dataset.id); });
+  if (exId && action === 'ex-remove') editExercise(exId, a => { a.blocks = a.blocks.filter(b => b !== target.dataset.id); });
+  if (exId && action === 'ex-move') editExercise(exId, a => { const i = a.blocks.indexOf(target.dataset.id); const j = i + Number(target.dataset.dir); if (i >= 0 && j >= 0 && j < a.blocks.length) [a.blocks[i], a.blocks[j]] = [a.blocks[j], a.blocks[i]]; });
+  if (exId && action === 'ex-pick') editExercise(exId, a => { a.picks[Number(target.dataset.item)] = Number(target.dataset.id); });
+  if (exId && action === 'ex-mark') editExercise(exId, a => { a.marks[target.dataset.item] = target.dataset.id; });
+  if (exId && action === 'ex-reset') { const st = exState.get(exId); if (st?.x) { st.answer = startAnswer(st.x, null, null); st.result = null; clearDraft(exId); paintExercise(exId); } }
   if (action === 'access') openAccess();
   if (action === 'check-subscription') checkSubscription(target);
   if (action === 'preview') { previewEntered = true; render(); }
@@ -507,7 +765,25 @@ document.addEventListener('click', event => {
   if (action === 'confirm-reset') resetAllProgress(target);
 });
 document.addEventListener('change', event => { if (event.target.id === 'task-done') { checked = event.target.checked; app.querySelector('.finish-button').disabled = !checked; } });
-document.addEventListener('input', event => { if (event.target.id === 'material-search') { search = event.target.value; promptLimit = 30; refreshResults(); } });
+document.addEventListener('input', event => {
+  if (event.target.id === 'material-search') { search = event.target.value; promptLimit = 30; refreshResults(); }
+  if (event.target.id === 'lesson-search') { lessonSearch = event.target.value; const box = document.querySelector('#lesson-results'); if (box) box.innerHTML = lessonListBody(Number(route().params.get('id')) || nextLesson()?.id || 1); }
+  if (event.target.id === 'ex-text') {
+    const id = event.target.closest('[data-ex]')?.dataset.ex; const st = exState.get(id); if (!st?.x) return;
+    st.answer.text = event.target.value; saveDraft(id);
+    const button = event.target.closest('[data-ex]').querySelector('[data-action="ex-check"]'); if (button && !st.busy) button.disabled = !event.target.value.trim();
+  }
+});
+// On a phone the on-screen keyboard should not push the bottom menu over a text field.
+document.addEventListener('focusin', event => { if (event.target.matches?.('textarea, input:not([type=checkbox]):not([type=radio])')) document.body.classList.add('typing'); });
+document.addEventListener('focusout', () => setTimeout(() => { if (!document.activeElement?.matches?.('textarea, input')) document.body.classList.remove('typing'); }, 50));
+// Two layouts: re-draw when the window crosses the computer width (split panels vs. separate screens).
+matchMedia('(min-width:1024px)').addEventListener?.('change', () => { if (bootstrapped && !document.activeElement?.matches?.('textarea, input')) render(); });
+function selectLesson(id) {
+  history.replaceState(null, '', '#lessons?id=' + id);
+  document.querySelectorAll('#lesson-results .lesson-row').forEach(row => { const on = Number(row.dataset.id) === id; row.classList.toggle('is-selected', on); if (on) row.setAttribute('aria-current', 'true'); else row.removeAttribute('aria-current'); });
+  const panel = document.querySelector('[data-learn="lesson-panel"]'); if (panel) { panel.dataset.id = String(id); panel.innerHTML = lessonPanel(id); }
+}
 // Checklist items («Готово, когда») inside a lesson become real checkboxes, saved per account.
 function wireChecklist(id) {
   const done = new Set(marks.tasks[id] || []);
@@ -647,27 +923,6 @@ async function pay(button) {
       closeModal(); toast('Платёж обрабатывается. Обновите приложение через минуту.');
     });
   } catch (error) { toast(error.status === 429 ? 'Подождите несколько секунд и попробуйте снова.' : 'Счёт пока недоступен. Попробуйте другой способ или напишите автору.'); if (button.isConnected) { button.disabled = false; button.textContent = 'Повторить оплату'; } }
-}
-// A trainer opens only after the server allows the launch (free accounts: 3 in total); a launch counts once per app session.
-function practiceView(params) {
-  const id = params.get('id');
-  if (!id) return `${practiceList(session?.practice)}${nav('practice')}`;
-  if (practiceStarted.has(id)) return `${practiceScreen(id)}${nav('practice')}`;
-  if (practiceBlocked.has(id) || (session?.practice && !session.practice.unlimited && session.practice.remaining <= 0)) return `${practicePaywall(id, priceLabel())}${nav('practice')}`;
-  startPractice(id, renderEpoch);
-  return `<header class="reader-header"><a href="#practice" class="back-link">${icon('back')}Практикум</a></header><div class="loading" role="status">Открываем тренажёр<span></span></div>${nav('practice')}`;
-}
-async function startPractice(id, epoch) {
-  try {
-    const result = await sendApi('/api/practice', { id });
-    setPracticeData(result.data); practiceStarted.add(id);
-    if (session) session.practice = { unlimited: result.unlimited, limit: result.limit, remaining: result.remaining };
-    if (!result.unlimited) toast(result.remaining ? `Бесплатный запуск. Осталось ${result.remaining} из ${result.limit}.` : 'Это был последний бесплатный запуск «Практикума».');
-  } catch (error) {
-    if (error.status === 403) { practiceBlocked.add(id); if (session?.practice) session.practice.remaining = 0; }
-    else if (epoch === renderEpoch) { app.innerHTML = `<header class="reader-header"><a href="#practice" class="back-link">${icon('back')}Практикум</a></header>${errorPanel()}${nav('practice')}`; return; }
-  }
-  if (route().name === 'practice' && route().params.get('id') === id) render();
 }
 function adminScreen() {
   if (!session?.isAdmin) return `<div class="empty-state"><h1>Доступ ограничен</h1><p>Этот раздел доступен только владельцу проекта.</p><a class="button button-secondary" href="#profile">В профиль</a></div>${nav('profile')}`;

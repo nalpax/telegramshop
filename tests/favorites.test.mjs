@@ -19,6 +19,7 @@ async function setup() {
   const content = {
     lessons: Array.from({ length: 24 }, (_, i) => ({ id: i + 1, title: `Урок ${i + 1}`, sections: [{ paragraphs: ['Секретный текст урока'] }] })),
     prompts: { categories: [], items: Array.from({ length: 210 }, (_, i) => ({ id: String(i + 1).padStart(3, '0'), title: `Промпт ${i + 1}`, use: 'b', prompt: 'Секретный текст промпта' })) },
+    resources: { estimate: 'Секретный текст шаблона' },
     articles: [{ id: 'start-how', title: 'Как начать', groupTitle: 'Старт', markdown: 'Секретный текст статьи', free: true }],
   };
   const server = createApp({ store, telegram: { isMember: async () => true, api: async () => true }, content }); await new Promise(r => server.listen(0, '127.0.0.1', r));
@@ -52,6 +53,9 @@ test('Favorites: add, repeat, remove, other accounts, unknown kind and id, no au
     assert.equal((await t.call('PUT', '/api/favorites/article/nope')).status, 404, 'unknown article');
     assert.equal((await t.call('PUT', '/api/favorites/lesson/start-how')).status, 404, 'an id of another kind');
     assert.equal((await t.call('PUT', '/api/favorites/video/1')).status, 400, 'unknown kind');
+    assert.equal((await t.call('PUT', '/api/favorites/resource/estimate')).status, 200, 'templates can be bookmarked too');
+    assert.equal((await t.call('PUT', '/api/favorites/resource/nope')).status, 404);
+    assert.equal((await t.call('DELETE', '/api/favorites/resource/estimate')).status, 200);
     assert.equal((await t.call('PUT', '/api/favorites/prompt/002', 0)).status, 401, 'no initData');
     assert.equal((await t.call('POST', '/api/favorites/prompt/002')).status, 404, 'only PUT and DELETE');
   } finally { await t.done(); }

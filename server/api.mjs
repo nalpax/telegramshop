@@ -7,6 +7,8 @@ import { MAX_OFFER_PERCENT, offerSettings } from './offers.mjs';
 import { FAVORITES_LIMIT, FAVORITE_KINDS } from './store-core.mjs';
 import { EXERCISES, checkAnswer, cleanAnswer, exerciseById, exerciseCard, projectState, publicExercise } from './exercises.mjs';
 
+// Titles of the lesson templates (public, the same as public/js/course.js «materials»): bookmarks carry the title only.
+const RESOURCE_TITLES = { 'first-prompt': 'Задача для первой страницы', 'mobile-prompt': 'Исправление мобильной версии', notes: 'Заметки для проекта (brief.txt)', 'brief-prompt': 'Интервью для брифа', 'reply-prompt': 'Отклик на заявку', estimate: 'Оценка работ', offer: 'Коммерческое предложение', handover: 'Список передачи проекта' };
 const CLIENT_EVENTS = ['app_open', 'lesson_open', 'paywall_view', 'checkout_start'];
 const CHECKOUT_METHODS = ['stars', 'platega', 'cryptobot', 'xrocket', 'stub'];
 import { sendBackup } from './backup.mjs';
@@ -64,6 +66,7 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
   function favoriteTitle(kind, itemId) {
     if (kind === 'prompt') return promptIndex.get(itemId)?.title || null;
     if (kind === 'article') return articleIndex.get(itemId)?.title || null;
+    if (kind === 'resource') return Object.hasOwn(resources, itemId) ? RESOURCE_TITLES[itemId] || itemId : null;
     if (kind === 'lesson' && /^\d{1,2}$/.test(itemId)) return lessons.find(l => l.id === Number(itemId))?.title || null;
     return null;
   }
@@ -82,7 +85,9 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
   }
   const contentReady = Array.from({ length: 24 }, (_, i) => i + 1).every(id => lessons.some(l => l.id === id && hasText(l))) && ['first-prompt', 'mobile-prompt', 'notes'].every(id => typeof resources[id] === 'string' && resources[id].length > 0);
   const promptList = () => ({ categories: prompts.categories || [], items: (prompts.items || []).map(({ id, title, use }) => ({ id, title, use })) });
-  const articleList = () => ({ items: articles.map(({ id, group, groupTitle, title, description, free }) => ({ id, group, groupTitle, title, description, free: !!free })) });
+  // outline: section headings only (the article's table of contents for the preview), never its text.
+  const outlineOf = markdown => (String(markdown || '').match(/^#{2,3} .+$/gm) || []).map(h => h.replace(/^#+\s*/, '').slice(0, 80)).slice(0, 6);
+  const articleList = () => ({ items: articles.map(({ id, group, groupTitle, title, description, free, markdown }) => ({ id, group, groupTitle, title, description, free: !!free, outline: outlineOf(markdown) })) });
   const pending = new Set();
   const recent = new Map();
   // What is sold and whether it can be bought right now: the bot's tariff screen uses the same facts as the app.

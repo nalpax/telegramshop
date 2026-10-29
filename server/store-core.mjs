@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 // node:sqlite on a server (server/store.mjs), Durable Object SQLite on Cloudflare (server/durable-sql.mjs).
 // Every table with data worth keeping, parents before children (orders before payments and invoices).
 export const BACKUP_TABLES = ['users', 'orders', 'payments', 'refunds', 'provider_invoices', 'progress', 'settings', 'promo_codes', 'audit', 'favorites', 'task_checks', 'events', 'exercise_results'];
-export const FAVORITE_KINDS = ['prompt', 'lesson', 'article'];
+export const FAVORITE_KINDS = ['prompt', 'lesson', 'article', 'resource'];
 export const FAVORITES_LIMIT = 200;
 const FAVORITES_COLUMNS = 'user_id INTEGER NOT NULL, kind TEXT NOT NULL, item_id TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY(user_id, kind, item_id)';
 // Funnel events (admin «Воронка»). Only a numeric user id, a type and a short meta — no names or texts.
