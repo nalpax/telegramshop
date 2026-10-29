@@ -146,6 +146,11 @@ test('Membership checks are cached briefly, failures are reported without granti
     assert.equal((await get('/api/lessons/1')).status, 200);
     process.env.MEMBERSHIP_CACHE_SECONDS = '0';
     assert.equal((await get('/api/lessons/1')).status, 503);
+    // Signing in still works when Telegram cannot answer (e.g. a misconfigured channel), so the owner can reach the admin panel.
+    // It fails closed: not subscribed, with a flag the app turns into a clear message.
+    const broken = await fetch(base + '/api/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ initData: signed(7) }) });
+    assert.equal(broken.status, 200); const data = await broken.json();
+    assert.equal(data.subscribed, false); assert.equal(data.subscriptionUnavailable, true); assert.equal(data.user.id, 7);
   } finally { await new Promise(resolve => server.close(resolve)); store.close(); for (const key of Object.keys(process.env)) if (!(key in old)) delete process.env[key]; Object.assign(process.env, old); }
 });
 test('The app and the server agree on the free lessons (01–05)', async () => {

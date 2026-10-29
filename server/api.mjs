@@ -197,10 +197,16 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
     }
     if (url.pathname === '/api/session') store.upsertUser(user);
     let subscribed;
+    let subscriptionUnavailable = false;
     try { subscribed = await subscribedUser(user.id, url.pathname === '/api/session'); }
-    catch { return send(503, { error: 'Subscription check is temporarily unavailable', reason: 'telegram' }); }
+    catch {
+      // Signing in must survive a Telegram failure (otherwise a wrong channel locks the owner out of the admin panel).
+      // It fails closed: not subscribed. Every content request below still answers 503.
+      if (url.pathname !== '/api/session') return send(503, { error: 'Subscription check is temporarily unavailable', reason: 'telegram' });
+      subscribed = false; subscriptionUnavailable = true;
+    }
     const access = store.entitlement(user.id);
-    if (url.pathname === '/api/session') return send(200, { user, subscribed, access, done: store.getProgress(user.id), isAdmin: isAdmin(user.id) });
+    if (url.pathname === '/api/session') return send(200, { user, subscribed, access, done: store.getProgress(user.id), isAdmin: isAdmin(user.id), ...(subscriptionUnavailable ? { subscriptionUnavailable } : {}) });
     if (!subscribed) return send(403, { error: 'Channel subscription required', reason: 'channel' });
     if (orderMatch) {
       const order = store.order(orderMatch[1]);
