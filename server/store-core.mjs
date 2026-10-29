@@ -91,6 +91,11 @@ export class StoreCore {
   }
   lastBackupAt() { return Number(this.db.prepare("SELECT value FROM settings WHERE key='last_backup_at'").get()?.value) || 0; }
   setLastBackupAt(now) { this.db.prepare("INSERT INTO settings VALUES ('last_backup_at',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(String(now)); }
+  // ---- system check (admin «Проверка системы») ----
+  markWebhookSeen(provider, now = Date.now()) { this.db.prepare("INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run('webhook_seen_' + provider, String(now)); }
+  webhookSeen(provider) { return Number(this.db.prepare('SELECT value FROM settings WHERE key=?').get('webhook_seen_' + provider)?.value) || 0; }
+  probeWrite(now = Date.now()) { this.db.prepare("INSERT INTO settings VALUES ('health_probe',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(String(now)); return Number(this.db.prepare("SELECT value FROM settings WHERE key='health_probe'").get()?.value) === now; }
+  lastPaidAt() { return this.db.prepare("SELECT MAX(paid_at) AS at FROM payments WHERE provider != 'manual' AND charge_id NOT IN (SELECT charge_id FROM refunds)").get()?.at || 0; }
   // ---- funnel: the first time each person reaches a step ----
   markStep(userId, step, now = Date.now()) { this.db.prepare('INSERT OR IGNORE INTO funnel_events VALUES (?,?,?)').run(userId, step, now); }
   // Administrators are left out: the owner tests the app all the time and would skew the numbers.
@@ -171,6 +176,7 @@ export class StoreCore {
     for (const row of rows) this.refund(row.charge_id);
     return rows.length;
   }
+  activeStarCharges(userId) { return this.db.prepare("SELECT charge_id FROM payments WHERE user_id=? AND provider='stars' AND charge_id NOT IN (SELECT charge_id FROM refunds)").all(userId).map(r => r.charge_id); }
   payment(chargeId) { return this.db.prepare('SELECT * FROM payments WHERE charge_id=?').get(chargeId) || null; }
   stats(now = Date.now()) {
     const one = (sql, ...a) => this.db.prepare(sql).get(...a);

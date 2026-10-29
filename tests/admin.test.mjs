@@ -16,15 +16,15 @@ async function setup() {
   const old = { ...process.env };
   Object.assign(process.env, { BOT_TOKEN: TOKEN, ADMIN_IDS: '1', PRICE_STARS: '1000', MEMBERSHIP_CACHE_SECONDS: '0', NODE_ENV: 'test' });
   delete process.env.REQUIRED_CHANNEL_ID; delete process.env.REQUIRED_CHANNEL_URL;
-  const store = new Store(':memory:'); const checked = []; let invoice;
-  const telegram = { isMember: async (userId, channels) => { checked.push(channels.map(c => c.chatId)); return channels.length > 0; }, api: async (method, payload) => { if (method === 'createInvoiceLink') invoice = payload; return 'https://t.me/$inv'; } };
+  const store = new Store(':memory:'); const checked = []; const calls = []; let invoice;
+  const telegram = { isMember: async (userId, channels) => { checked.push(channels.map(c => c.chatId)); return channels.length > 0; }, api: async (method, payload) => { calls.push([method, payload]); if (method === 'createInvoiceLink') invoice = payload; return 'https://t.me/$inv'; } };
   const content = { lessons: Array.from({ length: 24 }, (_, i) => ({ id: i + 1, sections: [{ paragraphs: ['x'] }] })), resources: { 'first-prompt': 'x', 'mobile-prompt': 'x', notes: 'x' }, prompts: { categories: [], items: [] }, articles: [] };
   const server = createApp({ store, telegram, content }); await new Promise(r => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   const get = (url, id = 1) => fetch(base + url, { headers: { 'X-Telegram-Init-Data': signed(id) } });
   const post = (url, data = {}, id = 1) => fetch(base + url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ initData: signed(id), ...data }) });
   const done = async () => { await new Promise(r => server.close(r)); store.close(); for (const key of Object.keys(process.env)) if (!(key in old)) delete process.env[key]; Object.assign(process.env, old); };
-  return { store, get, post, checked, done, invoice: () => invoice };
+  return { store, get, post, checked, calls, done, invoice: () => invoice };
 }
 
 test('Admin endpoints reject everyone who is not in ADMIN_IDS and never leak participants', async () => {
@@ -130,5 +130,23 @@ test('Lesson progress is remembered on the server and comes back with the next s
     assert.equal((await t.post('/api/progress', { lessonId: 25 }, 15)).status, 400);
     await t.post('/api/progress', { reset: true }, 15);
     assert.deepEqual((await (await t.post('/api/session', {}, 15)).json()).done, []);
+  } finally { await t.done(); }
+});
+
+test('Admin refunds Stars through Telegram refundStarPayment and access goes away', async () => {
+  const t = await setup();
+  try {
+    await t.post('/api/session', {}, 9);
+    assert.equal((await t.post('/api/admin/refund-stars', { userId: 9 })).status, 400, 'nothing to refund yet');
+    const order = t.store.createOrder(9, 1000, 'lifetime');
+    assert.ok(t.store.recordPayment(9, { invoice_payload: order.id, currency: 'XTR', total_amount: 1000, telegram_payment_charge_id: 'stxCharge9' }));
+    assert.equal(t.store.entitlement(9).active, true);
+    assert.equal((await t.post('/api/admin/refund-stars', { userId: 9 }, 5)).status, 403, 'only admins');
+    const response = await t.post('/api/admin/refund-stars', { userId: 9 });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { refunded: 1, plan: 'free' });
+    assert.deepEqual(t.calls.filter(([m]) => m === 'refundStarPayment').map(([, p]) => p), [{ user_id: 9, telegram_payment_charge_id: 'stxCharge9' }]);
+    assert.equal(t.store.entitlement(9).active, false);
+    assert.equal((await t.post('/api/admin/refund-stars', { userId: 9 })).status, 400, 'a second refund is refused');
   } finally { await t.done(); }
 });

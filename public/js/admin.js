@@ -4,7 +4,7 @@ import { icon } from './icons.js';
 import { EXPERIENCE, GOALS } from './onboarding.js';
 import { escape as e } from './state.js';
 
-const TABS = [['overview', 'Обзор'], ['users', 'Участники'], ['offers', 'Акции'], ['access', 'Доступ'], ['log', 'Журнал']];
+const TABS = [['overview', 'Обзор'], ['users', 'Участники'], ['offers', 'Акции'], ['access', 'Доступ'], ['system', 'Система'], ['log', 'Журнал']];
 const fmtDate = ms => ms ? new Date(ms).toLocaleString('ru-RU', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—';
 const fmtDay = ms => ms ? new Date(ms).toLocaleDateString('ru-RU', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
 const fullName = u => [u.firstName, u.lastName].filter(Boolean).join(' ') || 'Без имени';
@@ -22,6 +22,7 @@ export function createAdmin({ sendApi, getApi, toast, modal, closeModal, config,
       if (what === 'overview') state.funnel = await getApi(`/api/admin/funnel${state.funnelDays ? '?days=' + state.funnelDays : ''}`);
       if (what === 'users') state.users = await getApi(`/api/admin/users?plan=${state.plan}&page=${state.page}&q=${encodeURIComponent(state.q)}`);
       if (what === 'log') state.audit = await getApi('/api/admin/audit');
+      if (what === 'system') state.health = await getApi('/api/admin/health');
     } catch { state.error = true; }
     state.loading = false;
     paint();
@@ -45,6 +46,12 @@ export function createAdmin({ sendApi, getApi, toast, modal, closeModal, config,
     const chips = [[30, '30 дней'], [0, 'Всё время']].map(([d, label]) => `<button class="chip ${state.funnelDays === d ? 'is-active' : ''}" data-adm="funnel-days" data-id="${d}">${label}</button>`).join('');
     const rows = f.steps.map((step, i) => `<div class="funnel-row"><div class="funnel-head"><span>${e(step.label)}</span><strong>${step.count}</strong></div><progress max="100" value="${Math.min(100, step.ofTotal)}" aria-label="${step.ofTotal}% от всех"></progress><small>${step.ofTotal}% от всех${i ? ` · ${step.ofPrevious}% от предыдущего шага` : ''}</small></div>`).join('');
     return `<section class="admin-card"><h2>Воронка</h2><div class="chips">${chips}</div><p class="form-hint">Люди, которые впервые открыли приложение за выбранный период. Каждый шаг считается один раз на человека; администраторы не учитываются. Выданный вручную Pro — не покупка.</p>${f.steps[0].count ? rows : '<p class="admin-empty">Пока никого нет.</p>'}${f.offers?.sent ? `<p class="form-hint">Автоскидки: отправлено ${f.offers.sent}, использовано ${f.offers.used}.</p>` : ''}</section>`;
+  }
+  // «Проверка системы»: each line from /api/admin/health with its status and reason.
+  function systemTab() {
+    const h = state.health; const mark = { ok: ['check', 'Работает'], fail: ['close', 'Проблема'], off: ['more', 'Не настроено'] };
+    const counts = ['ok', 'fail', 'off'].map(k => h.items.filter(i => i.status === k).length);
+    return `<section class="admin-card"><h2>Проверка системы</h2><p class="admin-line">Проверено ${new Date(h.checkedAt).toLocaleString('ru-RU')}: работает ${counts[0]}, проблем ${counts[1]}, не настроено ${counts[2]}. Секреты здесь не показываются.</p><div class="health-list">${h.items.map(i => `<div class="health-row is-${i.status}"><span class="health-mark" aria-label="${mark[i.status][1]}">${icon(mark[i.status][0])}</span><div><strong>${e(i.label)}</strong><small>${e(i.detail)}</small></div></div>`).join('')}</div><button type="button" class="button button-secondary" data-adm="recheck">Проверить ещё раз</button></section>`;
   }
   function overviewTab() {
     const s = state.overview.stats;
@@ -86,15 +93,15 @@ export function createAdmin({ sendApi, getApi, toast, modal, closeModal, config,
     const items = state.audit?.items || [];
     return `<section class="admin-card"><h2>Последние действия</h2>${items.length ? items.map(a => `<div class="log-row"><small>${fmtDate(a.at)}</small><span><b>${e(a.admin)}</b> · ${e(logName(a.action))}${a.detail ? ' · ' + e(a.detail) : ''}</span></div>`).join('') : '<p class="admin-empty">Пока пусто.</p>'}</section>`;
   }
-  const logName = action => ({ backup: 'резервная копия', 'auto-offers': 'автоскидки в боте', offer: 'цена и скидка', channels: 'каналы доступа', promo: 'промокод', 'promo-delete': 'промокод удалён', provider: 'способ оплаты', 'rate-limit': 'частые запросы (похоже на парсинг)', grant: 'выдан Pro', revoke: 'Pro отозван' }[action] || action);
+  const logName = action => ({ backup: 'резервная копия', 'auto-offers': 'автоскидки в боте', offer: 'цена и скидка', channels: 'каналы доступа', promo: 'промокод', 'promo-delete': 'промокод удалён', provider: 'способ оплаты', 'rate-limit': 'частые запросы (похоже на парсинг)', grant: 'выдан Pro', revoke: 'Pro отозван', 'refund-stars': 'возврат Stars' }[action] || action);
 
   function paint() {
     const box = root(); if (!box) return;
     const tabs = `<div class="admin-tabs" role="tablist">${TABS.map(([id, label]) => `<button role="tab" aria-selected="${state.tab === id}" class="${state.tab === id ? 'is-active' : ''}" data-adm="tab" data-id="${id}">${label}</button>`).join('')}</div>`;
     let body;
     if (state.error) body = '<div class="empty-state"><h2>Не загрузилось</h2><p>Проверьте соединение и попробуйте ещё раз.</p><button class="button button-secondary" data-adm="reload">Повторить</button></div>';
-    else if ((state.tab === 'users' && !state.users && state.loading) || (state.tab === 'log' && !state.audit) || (['overview', 'offers', 'access'].includes(state.tab) && !state.overview)) body = '<p class="admin-empty">Загружаем…</p>';
-    else body = state.tab === 'overview' ? overviewTab() : state.tab === 'users' ? usersTab() : state.tab === 'offers' ? offersTab() : state.tab === 'access' ? accessTab() : logTab();
+    else if ((state.tab === 'users' && !state.users && state.loading) || (state.tab === 'log' && !state.audit) || (state.tab === 'system' && !state.health) || (['overview', 'offers', 'access'].includes(state.tab) && !state.overview)) body = '<p class="admin-empty">Загружаем…</p>';
+    else body = state.tab === 'overview' ? overviewTab() : state.tab === 'users' ? usersTab() : state.tab === 'offers' ? offersTab() : state.tab === 'access' ? accessTab() : state.tab === 'system' ? systemTab() : logTab();
     const keep = document.activeElement?.id === 'admin-search';
     box.innerHTML = tabs + `<div class="admin-body">${body}</div>`;
     if (keep) { const input = document.querySelector('#admin-search'); input.focus(); input.setSelectionRange(input.value.length, input.value.length); }
@@ -110,7 +117,7 @@ export function createAdmin({ sendApi, getApi, toast, modal, closeModal, config,
     try {
       const u = await getApi(`/api/admin/users/${id}`);
       const pay = u.payments.length ? u.payments.map(p => `<div class="log-row"><small>${fmtDate(p.paidAt * 1000)}</small><span>${p.manual ? 'Выдан вручную' : p.currency === 'XTR' || !p.currency ? p.stars + ' ★' : p.amount + ' ' + (p.currency === 'RUB' ? '₽' : p.currency) + ' · ' + e(p.provider)}${p.promo ? ' · код ' + e(p.promo) : ''}${p.refunded ? ' · <b class="warn">возврат</b>' : ''}</span></div>`).join('') : '<p class="admin-empty">Покупок нет.</p>';
-      const body = `<div class="user-card"><span class="user-avatar big">${e((u.firstName || '?')[0])}</span><div><strong>${e(fullName(u))}</strong><small>${u.username ? '@' + e(u.username) + ' · ' : ''}ID ${u.id}</small></div>${planBadge(u.plan)}</div><dl class="user-facts">${u.onboarding && u.onboarding.goal !== 'skip' ? `<div><dt>Цель</dt><dd>${e(GOALS.find(([id]) => id === u.onboarding.goal)?.[1] || '—')}</dd></div><div><dt>Опыт</dt><dd>${e(EXPERIENCE.find(([id]) => id === u.onboarding.experience)?.[1] || '—')}</dd></div>` : ''}<div><dt>Впервые открыл</dt><dd>${fmtDay(u.firstSeen)}</dd></div><div><dt>Последний раз</dt><dd>${fmtDate(u.lastSeen)}</dd></div><div><dt>Пройдено</dt><dd>${u.done.length}/24</dd></div></dl><h3>Платежи</h3>${pay}<div class="admin-actions">${u.username ? `<a class="button button-secondary" href="https://t.me/${e(u.username)}" data-external>Написать${icon('send')}</a>` : ''}${u.plan === 'pro' ? `<button class="button button-secondary danger" data-adm="revoke" data-id="${u.id}">Отозвать Pro</button>` : `<button class="button button-primary" data-adm="grant" data-id="${u.id}">Выдать Pro бесплатно</button>`}</div><p class="form-hint">«Отозвать» помечает платежи участника как возвращённые. Stars деньгами это не возвращает — возврат платежа делайте через Telegram.</p>`;
+      const body = `<div class="user-card"><span class="user-avatar big">${e((u.firstName || '?')[0])}</span><div><strong>${e(fullName(u))}</strong><small>${u.username ? '@' + e(u.username) + ' · ' : ''}ID ${u.id}</small></div>${planBadge(u.plan)}</div><dl class="user-facts">${u.onboarding && u.onboarding.goal !== 'skip' ? `<div><dt>Цель</dt><dd>${e(GOALS.find(([id]) => id === u.onboarding.goal)?.[1] || '—')}</dd></div><div><dt>Опыт</dt><dd>${e(EXPERIENCE.find(([id]) => id === u.onboarding.experience)?.[1] || '—')}</dd></div>` : ''}<div><dt>Впервые открыл</dt><dd>${fmtDay(u.firstSeen)}</dd></div><div><dt>Последний раз</dt><dd>${fmtDate(u.lastSeen)}</dd></div><div><dt>Пройдено</dt><dd>${u.done.length}/24</dd></div></dl><h3>Платежи</h3>${pay}<div class="admin-actions">${u.username ? `<a class="button button-secondary" href="https://t.me/${e(u.username)}" data-external>Написать${icon('send')}</a>` : ''}${u.plan === 'pro' ? `${u.payments.some(p => p.provider === 'stars' && !p.refunded) ? `<button class="button button-secondary danger" data-adm="refund-stars" data-id="${u.id}">Вернуть Stars</button>` : ''}<button class="button button-secondary danger" data-adm="revoke" data-id="${u.id}">Отозвать Pro</button>` : `<button class="button button-primary" data-adm="grant" data-id="${u.id}">Выдать Pro бесплатно</button>`}</div><p class="form-hint">«Вернуть Stars» возвращает звёзды покупателю через Telegram и закрывает доступ. «Отозвать» только помечает платежи как возвращённые: деньги через Platega или криптой возвращайте в кабинете провайдера.</p>`;
       const detail = document.querySelector('#user-detail'); if (detail) { detail.innerHTML = body; document.querySelector('#modal-title').textContent = fullName(u); }
     } catch { const p = document.querySelector('#user-detail .admin-empty'); if (p) p.textContent = 'Не удалось загрузить участника.'; }
   }
@@ -139,7 +146,14 @@ export function createAdmin({ sendApi, getApi, toast, modal, closeModal, config,
       try { await sendApi(`/api/admin/${action}`, { userId: Number(id) }); toast(action === 'grant' ? 'Pro выдан.' : 'Pro отозван.'); closeModal(); state.users = null; state.overview = null; load(state.tab); }
       catch { toast('Не получилось. Попробуйте ещё раз.'); target.disabled = false; }
     }
+    else if (action === 'refund-stars') {
+      if (!target.dataset.sure) { target.dataset.sure = '1'; target.textContent = 'Точно вернуть?'; return; }
+      target.disabled = true;
+      try { const r = await sendApi('/api/admin/refund-stars', { userId: Number(id) }); toast(`Возврат проведён (${r.refunded}). Доступ закрыт.`); closeModal(); state.users = null; state.overview = null; load(state.tab); }
+      catch (error) { toast(error.message === 'Request failed' ? 'Не получилось. Попробуйте ещё раз.' : error.message); target.disabled = false; }
+    }
     else if (action === 'backup') { target.disabled = true; try { await sendApi('/api/admin/backup', {}); toast('Файл отправлен вам в чат с ботом.'); } catch (error) { toast(error.message === 'Request failed' ? 'Не удалось отправить. Напишите боту /start и попробуйте ещё раз.' : error.message); } target.disabled = false; }
+    else if (action === 'recheck') { state.health = null; paint(); load('system'); }
     else if (action === 'funnel-days') { state.funnelDays = Number(target.dataset.id); load('overview'); }
     else if (action === 'save-auto-offers') {
       const form = document.querySelector('#auto-offers-form'); if (!form.reportValidity()) return;

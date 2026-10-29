@@ -355,3 +355,8 @@ progress::-moz-progress-bar{background:var(--accent);border-radius:4px}
 .next-lesson{background:transparent;border:1px solid var(--line-2);border-radius:var(--r-md)}
 .term{text-decoration-color:var(--ink-3)}
 @media (max-width:380px){.bottom-nav .nav-item span{font-size:11px;letter-spacing:-.02em}}
+/* Admin · «Проверка системы» */
+.health-list{border-top:1px solid var(--line);margin:8px 0 14px}.health-row{display:flex;gap:12px;align-items:flex-start;padding:12px 0;border-bottom:1px solid var(--line)}
+.health-row strong{display:block;font-size:15px;color:var(--ink)}.health-row small{display:block;font-size:13px;line-height:1.45;color:var(--ink-2);word-break:break-word}
+.health-mark{flex:none;width:28px;height:28px;border-radius:50%;display:grid;place-items:center;border:1px solid var(--line-2);color:var(--ink-3)}.health-mark .icon{width:16px;height:16px}
+.health-row.is-ok .health-mark{border-color:var(--accent);color:var(--accent)}.health-row.is-fail .health-mark{border-color:var(--danger);color:var(--danger)}.health-row.is-fail strong{color:var(--danger)}

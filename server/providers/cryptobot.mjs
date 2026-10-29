@@ -28,6 +28,8 @@ export function cryptobot(env, fetchImpl) {
       if (body?.update_type !== 'invoice_paid' || id === undefined) return { externalId: null, paidHint: false };
       return { externalId: String(id), paidHint: true };
     },
+    // Used by the admin system check: confirms the token is accepted.
+    async ping() { const data = await http(fetchImpl, base() + '/getMe', { headers: auth() }); if (!data?.ok) throw new Error('CryptoBot: token not accepted'); return true; },
     async fetchStatus(externalId) {
       const data = await http(fetchImpl, `${base()}/getInvoices?invoice_ids=${encodeURIComponent(externalId)}`, { headers: auth() });
       const invoice = data?.ok ? data.result?.items?.[0] : null;

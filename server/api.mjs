@@ -84,6 +84,7 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
       if (!provider || !provider.configured()) return send(404, { error: 'Unknown provider' });
       const event = provider.verifyWebhook({ headers: request.headers, rawBody: await readRaw(request) });
       if (!event) return send(401, { error: 'Invalid signature' });
+      store.markWebhookSeen(provider.id);
       try { if (event.externalId) await settle(provider, event.externalId, event); } catch { return send(500, { error: 'Try again later' }); }
       return send(200, { ok: true });
     }
@@ -167,6 +168,41 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
         if (!row) return send(404, { error: 'User not found' });
         return send(200, { id: row.id, firstName: row.first_name, lastName: row.last_name, username: row.username, firstSeen: row.first_seen, lastSeen: row.last_seen, onboarding: store.onboarding(row.id), done: store.getProgress(row.id), plan: store.entitlement(row.id).active ? 'pro' : 'free', payments: store.userPayments(row.id).map(p => ({ provider: p.provider, amount: p.amount, currency: p.currency, chargeId: p.charge_id.startsWith('manual-') ? 'manual' : p.charge_id.slice(0, 12) + '…', stars: p.stars, paidAt: p.paid_at, promo: p.promo, refunded: !!p.refunded, manual: p.charge_id.startsWith('manual-') })) });
       }
+      // «Проверка системы»: what can be checked from the server, line by line. Never includes a secret or a part of one.
+      if (route === 'health' && get) {
+        const items = []; const add = (id, label, status, detail) => items.push({ id, label, status, detail });
+        const appUrl = (process.env.APP_URL || '').replace(/\/$/, ''); const wantBot = String(process.env.BOT_USERNAME || '').replace(/^@/, '');
+        const reason = error => `${Number(error?.code || error?.status) || 'нет соединения'}${error?.description ? ': ' + String(error.description).slice(0, 120) : ''}`;
+        let me = null;
+        try { me = await telegram.api('getMe'); add('bot', 'Бот отвечает', !wantBot || me.username === wantBot ? 'ok' : 'fail', !wantBot || me.username === wantBot ? `@${me.username}` : `Бот @${me.username}, а в настройках BOT_USERNAME = @${wantBot}`); }
+        catch (error) { add('bot', 'Бот отвечает', 'fail', `Telegram не ответил (${reason(error)}). Проверьте BOT_TOKEN.`); }
+        let hook = null;
+        try { hook = await telegram.api('getWebhookInfo'); } catch {}
+        if (hook) add('webhook', 'Telegram доставляет обновления боту', hook.url && hook.url.startsWith(appUrl) && !hook.last_error_message ? 'ok' : hook.url ? 'fail' : 'off', hook.url ? (hook.last_error_message ? `Ошибка доставки: ${String(hook.last_error_message).slice(0, 120)}` : `Webhook: ${hook.url}, в очереди ${hook.pending_update_count || 0}`) : 'Webhook не задан (на своём сервере это нормально: бот работает через npm run bot)');
+        for (const channel of channelsFor(store)) {
+          try {
+            const bot = me ? await telegram.api('getChatMember', { chat_id: channel.chatId, user_id: me.id }) : null;
+            const probe = await telegram.api('getChatMember', { chat_id: channel.chatId, user_id: user.id });
+            const isAdmin = ['administrator', 'creator'].includes(bot?.status);
+            add(`channel:${channel.chatId}`, `Канал ${channel.title || channel.chatId}`, isAdmin ? 'ok' : 'fail', isAdmin ? `Бот — администратор; проверка участника работает (ваш статус: ${probe.status})` : `Бот не администратор (статус: ${bot?.status || 'неизвестен'}) — проверка подписки может не работать`);
+          } catch (error) { add(`channel:${channel.chatId}`, `Канал ${channel.title || channel.chatId}`, 'fail', `Telegram: ${reason(error)}`); }
+        }
+        if (!channelsFor(store).length) add('channels', 'Каналы доступа', 'fail', 'Не задан ни один канал — бесплатные уроки никому не откроются');
+        const httpsOk = /^https:\/\/[^/]+/.test(appUrl);
+        add('url', 'Публичный адрес (APP_URL)', httpsOk && hook?.url?.startsWith(appUrl) && !hook?.last_error_message ? 'ok' : httpsOk ? 'off' : 'fail', !httpsOk ? 'APP_URL не задан или не https' : hook?.url?.startsWith(appUrl) ? `${appUrl} — Telegram доставляет сюда обновления без ошибок` : `${appUrl} — https, но доставку Telegram на него проверить не удалось`);
+        for (const provider of providers.list) {
+          if (!provider.configured()) { add(`provider:${provider.id}`, provider.title, 'off', 'Ключи не заданы'); continue; }
+          if (!provider.ping) add(`provider:${provider.id}`, provider.title, 'off', 'Ключи заданы; у провайдера нет метода проверки соединения — проверьте тестовым платежом');
+          else { try { await provider.ping(); add(`provider:${provider.id}`, provider.title, 'ok', `Ключи заданы, API отвечает${store.providerState()[provider.id] ? '' : ' (способ выключен в «Акциях»)'}`); } catch (error) { add(`provider:${provider.id}`, provider.title, 'fail', `API не принял ключи или недоступен (${reason(error)})`); } }
+          const seen = store.webhookSeen(provider.id);
+          add(`webhook:${provider.id}`, `Вебхук ${provider.title}`, seen ? 'ok' : 'off', `${appUrl}/api/webhooks/${provider.id} — ${seen ? 'последний с верной подписью: ' + new Date(seen).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' }) + ' (МСК)' : 'ещё не приходил. Зарегистрируйте адрес в кабинете провайдера.'}`);
+        }
+        let written = false; try { written = store.probeWrite(); } catch {}
+        add('database', 'Запись в базу', written ? 'ok' : 'fail', written ? 'Запись и чтение работают' : 'Не удалось записать в базу');
+        const paid = store.lastPaidAt();
+        add('payment', 'Последняя оплата', paid ? 'ok' : 'off', paid ? new Date(paid * 1000).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' }) + ' (МСК)' : 'Пока не было ни одной подтверждённой оплаты');
+        return send(200, { checkedAt: Date.now(), items });
+      }
       if (get && route === 'audit') return send(200, { items: store.auditLog().map(a => ({ at: a.at, admin: a.username ? '@' + a.username : a.first_name || String(a.admin_id), action: a.action, detail: a.detail })) });
       if (get) return send(404, { error: 'Unknown API endpoint' });
       if (route === 'grant' || route === 'revoke') {
@@ -174,6 +210,20 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
         const changed = route === 'grant' ? store.grantAccess(data.userId) : store.revokeAccess(data.userId);
         store.log(user.id, route, `user ${data.userId}`);
         return send(200, { changed: !!changed, plan: store.entitlement(data.userId).active ? 'pro' : 'free' });
+      }
+      // Real Stars refund: Telegram returns the Stars to the buyer, then access is removed here (the refunded_payment
+      // update would do the same). Only Stars payments can be refunded this way; other providers refund in their own cabinet.
+      if (route === 'refund-stars') {
+        if (!Number.isSafeInteger(data.userId) || !store.userRow(data.userId)) return bad('Unknown user');
+        const charges = store.activeStarCharges(data.userId);
+        if (!charges.length) return bad('У участника нет действующих оплат звёздами');
+        let refunded = 0;
+        for (const charge of charges) {
+          try { await telegram.api('refundStarPayment', { user_id: data.userId, telegram_payment_charge_id: charge }); store.refund(charge); refunded++; }
+          catch (error) { store.log(user.id, 'refund-stars', `user ${data.userId}: Telegram ${Number(error.code) || 'error'}`); return send(502, { error: `Telegram не провёл возврат (${error.description || 'ошибка сети'}). Возвращено: ${refunded}.` }); }
+        }
+        store.log(user.id, 'refund-stars', `user ${data.userId}: ${refunded}`);
+        return send(200, { refunded, plan: store.entitlement(data.userId).active ? 'pro' : 'free' });
       }
       if (route === 'channels') {
         if (!Array.isArray(data.channels) || data.channels.length > 5) return bad('До 5 каналов или чатов');

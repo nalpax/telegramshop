@@ -25,7 +25,8 @@ async function setup(extraEnv = {}) {
     if (url.includes('/transaction/')) return reply(remote.status[url.split('/transaction/')[1]] || {}, remote.status[url.split('/transaction/')[1]] ? 200 : 404);
     if (url.endsWith('/createInvoice')) { remote.created.push({ provider: 'cryptobot', headers: init.headers, body }); remote.status['777'] = { status: 'active', amount: body.amount, asset: 'USDT' }; return reply({ ok: true, result: { invoice_id: 777, status: 'active', mini_app_invoice_url: 'https://t.me/CryptoBot/app?startapp=invoice-x', bot_invoice_url: 'https://t.me/CryptoBot?start=x' } }); }
     if (url.includes('/getInvoices')) { const id = new URL(url).searchParams.get('invoice_ids'); return reply({ ok: true, result: { items: remote.status[id] ? [remote.status[id]] : [] } }); }
-    if (url.endsWith('/api/v1/invoices')) { remote.created.push({ provider: 'xrocket', headers: init.headers, body }); return reply({ success: true, data: { id: 'xr-1', link: 'https://t.me/xRocket?start=inv_xr1' } }, 201); }
+    if (url.endsWith('/api/v1/invoices')) { remote.created.push({ provider: 'xrocket', headers: init.headers, body }); remote.status['xr-1'] = { id: 'xr-1', status: 'active', priceAmount: body.priceAmount, priceCurrency: body.priceCurrency, clientInvoiceId: body.clientInvoiceId }; return reply({ ...remote.status['xr-1'], links: { telegramBotLink: 'https://t.me/xRocket?start=inv_xr1', telegramMiniAppLink: 'https://t.me/xRocket/app?startapp=inv_xr1' } }); }
+    if (url.includes('/api/v1/invoice?invoiceId=')) { const id = new URL(url).searchParams.get('invoiceId'); return reply(remote.status[id] || {}, remote.status[id] ? 200 : 404); }
     return reply({}, 404);
   };
   const store = new Store(':memory:');
@@ -111,20 +112,28 @@ test('Platega: header-authenticated callback is re-checked with GET /transaction
   } finally { await t.done(); }
 });
 
-test('xRocket: documented webhook signature (timestamp.body), stale timestamps and wrong secrets are rejected', async () => {
+test('xRocket (current API): invoice fields, signed webhook is only a hint, the lookup at xRocket decides', async () => {
   const t = await setup();
   try {
     await enableAll(t);
     const invoice = await (await t.post('/api/invoice', { method: 'xrocket' }, 30)).json();
-    assert.equal(invoice.url, 'https://t.me/xRocket?start=inv_xr1');
-    assert.equal(t.remote.created.find(c => c.provider === 'xrocket').headers.Authorization, 'Bearer xr-key');
-    const body = JSON.stringify({ type: 'invoicePay', data: { id: 'xr-1', status: 'paid', amount: 9.99, currency: 'USDT', payload: invoice.orderId } });
+    assert.equal(invoice.url, 'https://t.me/xRocket/app?startapp=inv_xr1');
+    const sent = t.remote.created.find(c => c.provider === 'xrocket');
+    assert.equal(sent.headers.Authorization, 'Bearer xr-key');
+    assert.deepEqual([sent.body.priceAmount, sent.body.priceCurrency, sent.body.numPayments, sent.body.clientInvoiceId], ['9.99', 'USDT', 1, invoice.orderId]);
+    const body = JSON.stringify({ id: 'wh-1', timestamp: new Date().toISOString(), type: 'invoice', data: { event: 'invoice_status_changed', invoice: { id: 'xr-1', status: 'paid', priceAmount: '9.99', priceCurrency: 'USDT', clientInvoiceId: invoice.orderId } } });
     const sign = (stamp, secret = 'xr-hook') => ({ signature: createHmac('sha256', secret).update(`${stamp}.${body}`).digest('hex'), 'signature-timestamp': String(stamp), 'signature-version': 'v1' });
     assert.equal((await t.raw('/api/webhooks/xrocket', body, sign(Date.now(), 'other'))).status, 401);
     assert.equal((await t.raw('/api/webhooks/xrocket', body, sign(Date.now() - 600000))).status, 401, 'older than five minutes');
-    assert.equal((await (await t.post('/api/session', {}, 30)).json()).access.active, false);
     assert.equal((await t.raw('/api/webhooks/xrocket', body, sign(Date.now()))).status, 200);
+    assert.equal((await (await t.post('/api/session', {}, 30)).json()).access.active, false, 'xRocket itself still says active: no access');
+    t.remote.status['xr-1'] = { ...t.remote.status['xr-1'], status: 'paid', priceAmount: '1.00' };
+    await t.raw('/api/webhooks/xrocket', body, sign(Date.now()));
+    assert.equal((await (await t.post('/api/session', {}, 30)).json()).access.active, false, 'paid, but the wrong amount: refused');
+    t.remote.status['xr-1'] = { ...t.remote.status['xr-1'], status: 'paid', priceAmount: '9.99' };
+    await t.raw('/api/webhooks/xrocket', body, sign(Date.now())); await t.raw('/api/webhooks/xrocket', body, sign(Date.now()));
     assert.equal((await (await t.post('/api/session', {}, 30)).json()).access.active, true);
+    assert.equal(t.store.db.prepare("SELECT count(*) AS n FROM payments WHERE provider='xrocket'").get().n, 1, 'a repeated webhook does not double the payment');
   } finally { await t.done(); }
 });
 

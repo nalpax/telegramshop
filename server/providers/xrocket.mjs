@@ -1,41 +1,43 @@
-// xRocket Pay (https://docs.xrocket.exchange/api/pay) — NEW API: base https://pay.api.xrocket.exchange, POST /api/v1/invoices, Bearer token.
-// Webhook signature (documented): header `Signature` = hex HMAC-SHA256(webhook secret, `${Signature-Timestamp}.${raw body}`), Signature-Version 'v1',
-// timestamp in ms, reject if older than 5 minutes. The webhook secret is NOT the API token.
-//
-// UNVERIFIED: the public docs we could read did not show the exact invoice request/response field names or a single-invoice lookup.
-// The names below follow the older xRocket API (amount, currency, description, payload, expiredIn, numPayments; response id + link).
-// Parsing is tolerant, but test with a real key in xRocket's testnet (XROCKET_API_BASE) BEFORE you switch this provider on.
-// Without a lookup we trust only a correctly signed webhook whose payload (our order id) and amount match the order.
+// xRocket Pay — current API (checked against the OpenAPI spec at https://pay.api.xrocket.exchange/api/docs-json, 29.10.2026).
+//  Auth: Authorization: Bearer <API token> (xRocket Pay → app → Settings → API Token).
+//  POST {base}/api/v1/invoices  body {priceAmount:'9.99', priceCurrency:'USDT', numPayments:1, clientInvoiceId, description, expiresIn, url:{successUrl,cancelUrl}}
+//    -> InvoiceDto {id, status, priceAmount, priceCurrency, clientInvoiceId, links:{telegramBotLink, telegramMiniAppLink, webLink}}
+//  GET  {base}/api/v1/invoice?invoiceId=ID -> InvoiceDto; status: active | paid | partially_paid | expired | cancelled
+//  Webhook body {id, timestamp, type:'invoice', data:{event:'invoice_status_changed'|'payment_status_changed', invoice: InvoiceDto}}
+//    headers Signature-Timestamp (ms), Signature-Version 'v1', Signature = hex HMAC-SHA256(webhook secret, `${timestamp}.${raw body}`).
+// Like the other providers the webhook is only a hint: the invoice is looked up at xRocket before access is granted.
+// needsSandboxCheck stays on until a real test payment went through (handoff/LIVE_TEST_RU.md).
 import { hmacHex, http, safeEqual } from './index.mjs';
 export function xrocket(env, fetchImpl) {
   const base = () => (env.XROCKET_API_BASE || 'https://pay.api.xrocket.exchange').replace(/\/$/, '');
   const auth = () => ({ Authorization: `Bearer ${env.XROCKET_API_KEY || ''}` });
-  const dig = (obj, ...keys) => { for (const k of keys) { const v = k.split('.').reduce((o, p) => o?.[p], obj); if (v !== undefined && v !== null) return v; } return undefined; };
+  const unwrap = data => (data && typeof data === 'object' && data.data && !data.id ? data.data : data);
   return {
     id: 'xrocket', title: 'Криптовалюта (xRocket)', currency: 'USDT', symbol: 'USDT', external: true, needsSandboxCheck: true,
     configured: () => !!(env.XROCKET_API_KEY && env.XROCKET_WEBHOOK_SECRET),
-    async createInvoice({ order }) {
-      const data = await http(fetchImpl, base() + '/api/v1/invoices', { method: 'POST', headers: auth(), body: {
-        amount: order.amount, currency: 'USDT', description: 'Vibentry — полный доступ', payload: order.id, clientInvoiceId: order.id, numPayments: 1, expiredIn: 3600 } });
-      const id = dig(data, 'data.id', 'id'); const link = dig(data, 'data.link', 'link');
-      if (!id || typeof link !== 'string') throw new Error('xRocket: unexpected response');
-      return { externalId: String(id), payUrl: link };
+    async createInvoice({ order, urls = {} }) {
+      const invoice = unwrap(await http(fetchImpl, base() + '/api/v1/invoices', { method: 'POST', headers: auth(), body: {
+        priceAmount: order.amount.toFixed(2), priceCurrency: 'USDT', numPayments: 1, clientInvoiceId: order.id, description: 'Vibentry — полный доступ', expiresIn: 3600,
+        ...(urls.success ? { url: { successUrl: urls.success, cancelUrl: urls.fail || urls.success } } : {}) } }));
+      const link = invoice?.links?.telegramMiniAppLink || invoice?.links?.telegramBotLink || invoice?.links?.webLink;
+      if (!invoice?.id || typeof link !== 'string') throw new Error('xRocket: unexpected response');
+      return { externalId: String(invoice.id), payUrl: link };
     },
     verifyWebhook({ headers, rawBody, now = Date.now() }) {
       const secret = env.XROCKET_WEBHOOK_SECRET; const stamp = headers['signature-timestamp'];
       if (!secret || headers['signature-version'] !== 'v1' || !/^\d{10,16}$/.test(String(stamp)) || Math.abs(now - Number(stamp)) > 300000) return null;
       if (!safeEqual(headers.signature, hmacHex(secret, `${stamp}.${rawBody}`))) return null;
       let body; try { body = JSON.parse(rawBody); } catch { return null; }
-      const id = dig(body, 'data.id', 'invoice.id', 'id'); const status = String(dig(body, 'data.status', 'status') ?? ''); const type = String(dig(body, 'type', 'event', 'eventType') ?? '');
-      return { externalId: id === undefined ? null : String(id), paidHint: /paid/i.test(status) || /paid/i.test(type), claimed: { amount: Number(dig(body, 'data.amount', 'amount')), currency: dig(body, 'data.currency', 'currency'), payload: dig(body, 'data.payload', 'payload') } };
+      const invoice = body?.data?.invoice;
+      if (body?.type !== 'invoice' || !invoice?.id) return { externalId: null, paidHint: false };
+      return { externalId: String(invoice.id), paidHint: invoice.status === 'paid' };
     },
-    // No documented single-invoice lookup: try the conventional path, and report "unknown" (null) if it does not answer as expected.
     async fetchStatus(externalId) {
-      try {
-        const data = await http(fetchImpl, `${base()}/api/v1/invoices/${encodeURIComponent(externalId)}`, { headers: auth() });
-        const status = String(dig(data, 'data.status', 'status') ?? ''); if (!status) return null;
-        return { paid: /paid/i.test(status), amount: Number(dig(data, 'data.amount', 'amount')), currency: dig(data, 'data.currency', 'currency') };
-      } catch { return null; }
+      const invoice = unwrap(await http(fetchImpl, `${base()}/api/v1/invoice?invoiceId=${encodeURIComponent(externalId)}`, { headers: auth() }));
+      if (!invoice?.status) return null;
+      return { paid: invoice.status === 'paid', amount: Number(invoice.priceAmount), currency: invoice.priceCurrency };
     },
+    // Admin system check: a cheap authenticated call (401 means the token is wrong).
+    async ping() { await http(fetchImpl, `${base()}/api/v1/invoices?limit=1`, { headers: auth() }); return true; },
   };
 }
