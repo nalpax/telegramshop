@@ -1,10 +1,20 @@
 """Optional UI smoke test. Requires Python Playwright + Chromium; not an app dependency."""
-import json, os
+import hashlib, hmac, json, os, subprocess, time
+from urllib.parse import urlencode
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 BASE_URL = os.environ.get('BASE_URL', 'http://127.0.0.1:3000')
 out = Path('artifacts'); out.mkdir(exist_ok=True)
+ROOT = Path(__file__).resolve().parent.parent
+SIGNED_PORT = int(os.environ.get('SMOKE_PORT', '3001'))
+SMOKE_TOKEN = '123456:synthetic_smoke_token_not_a_real_one_x'  # same synthetic token as scripts/smoke-server.mjs
+
+def init_data(user_id):
+    fields = {'auth_date': str(int(time.time())), 'query_id': 'smoke', 'user': json.dumps({'id': user_id, 'first_name': 'Тест'}, ensure_ascii=False, separators=(',', ':'))}
+    check = '\n'.join(f'{k}={fields[k]}' for k in sorted(fields))
+    secret = hmac.new(b'WebAppData', SMOKE_TOKEN.encode(), hashlib.sha256).digest()
+    return urlencode({**fields, 'hash': hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()})
 with sync_playwright() as p:
     chromium = os.environ.get('CHROMIUM_PATH')
     browser = p.chromium.launch(**({'executable_path': chromium} if chromium else {}), args=['--no-sandbox'])
@@ -27,11 +37,14 @@ with sync_playwright() as p:
         page.screenshot(path=str(out / f'lesson-{width}.png'), full_page=True)
         page.get_by_role('checkbox').check()
         page.get_by_role('button', name='Завершить урок').click()
+        page.wait_for_url('**#lesson?id=2')  # free lessons lead straight to the next one
+        page.evaluate("location.hash = '#home'")
         page.get_by_text('Пройдено 1 из 24 уроков').wait_for()
         page.get_by_role('link', name='Материалы', exact=True).click()
-        page.locator('[data-action="lesson"][data-id="2"]').click()
+        page.locator('[data-action="lesson"][data-id="6"]').click()
         page.get_by_role('dialog').wait_for()
-        assert page.get_by_role('button', name='Покупка пока недоступна').is_disabled()
+        page.get_by_role('dialog').locator('[data-action="pay-stub"]').click()  # demo: payments are off, a clear stub is shown
+        page.locator('#pay-stub:not(.is-hidden)').wait_for()
         page.keyboard.press('Escape')
         page.get_by_role('searchbox').fill('клиент')
         assert page.locator('.lesson-row').count() > 0
@@ -53,38 +66,63 @@ with sync_playwright() as p:
         page.get_by_text('Демо: прогресс сохраняется только на этом устройстве.').wait_for()
         assert not errors, errors
         context.close()
-    # Admin and checkout UI fixtures only. These do not replace server authorization tests.
-    context = browser.new_context(viewport={'width': 390, 'height': 844})
-    page = context.new_page()
-    page.route('https://telegram.org/**', lambda r: r.fulfill(content_type='text/javascript', body='window.Telegram={WebApp:{initData:"ui-fixture",ready(){},expand(){},setHeaderColor(){},setBackgroundColor(){},BackButton:{onClick(){},show(){},hide(){}},openInvoice(url,cb){cb("cancelled")}}};'))
-    configuration = {'supportUsername': 'nalpax', 'requiredChannelUrl': 'https://t.me/examplechannel', 'priceStars': 500, 'regularPriceStars': 500, 'discountPercent': 0, 'accessMode': 'one_time', 'paymentsEnabled': True, 'preview': False}
-    page.route('**/api/config', lambda r: r.fulfill(json=configuration))
-    page.route('**/api/session', lambda r: r.fulfill(json={'user': {'id': 424242, 'first_name': 'Владелец'}, 'subscribed': True, 'access': {'active': False, 'expiresAt': None}, 'done': [], 'isAdmin': True}))
-    def offer_save(route):
-        payload = route.request.post_data_json
-        assert payload['priceStars'] == 750 and payload['discountPercent'] == 20
-        configuration.update({'priceStars': 600, 'regularPriceStars': 750, 'discountPercent': 20})
-        route.fulfill(json={'current': {'priceStars': 600, 'regularPriceStars': 750, 'discountPercent': 20, 'saleEndsAt': None}})
-    page.route('**/api/admin/offer', offer_save)
-    overview = {'priceStars': 500, 'discountPercent': 0, 'saleEndsAt': None, 'current': {'priceStars': 500, 'regularPriceStars': 500, 'discountPercent': 0, 'saleEndsAt': None}, 'channels': [], 'effectiveChannels': [], 'promos': [], 'stats': {'users': 3, 'pro': 1, 'free': 2, 'revenue': 500, 'refunds': 0, 'new7': 2, 'conversion': 33.3, 'daily': {'start': 0, 'joined': [0] * 14, 'paid': [0] * 14}}}
-    page.route('**/api/admin/overview', lambda r: r.fulfill(json=overview))
-    page.route('**/api/invoice', lambda r: r.fulfill(json={'url': 'https://t.me/$ui-fixture'}))
-    page.goto(BASE_URL, wait_until='networkidle')
-    page.get_by_role('link', name='Профиль', exact=True).click()
-    page.get_by_role('link', name='Админ-панель: участники, акции, каналы').click()
-    page.get_by_role('tab', name='Акции').click()
-    page.locator('[name="priceStars"]').fill('750')
-    page.locator('[name="discountPercent"]').fill('20')
-    page.get_by_role('button', name='Сохранить цену').click()
-    page.get_by_text('Цена и акция сохранены.').wait_for()
-    page.screenshot(path=str(out / 'admin-390.png'), full_page=True)
-    page.get_by_role('link', name='В профиль', exact=True).click()
-    page.locator('.access-banner').click()
-    page.get_by_role('button', name='Оплатить 600 ★').wait_for()
-    assert 'навсегда' in page.get_by_role('dialog').inner_text()
-    page.screenshot(path=str(out / 'checkout-390.png'), full_page=True)
-    page.get_by_role('button', name='Оплатить 600 ★').click()
-    assert page.get_by_role('button', name='Оплатить 600 ★').is_enabled()
-    context.close()
+    # Signed flows against the real API: scripts/smoke-server.mjs (fake Telegram, in-memory database, synthetic token).
+    server = subprocess.Popen(['node', str(ROOT / 'scripts/smoke-server.mjs'), str(SIGNED_PORT)], stdout=subprocess.PIPE, text=True)
+    try:
+        assert 'smoke server' in server.stdout.readline()
+        signed_url = f'http://127.0.0.1:{SIGNED_PORT}/'
+
+        def open_as(user_id, width=390, height=844):
+            context = browser.new_context(viewport={'width': width, 'height': height}, device_scale_factor=1)
+            page = context.new_page(); page.errors = []
+            page.on('pageerror', lambda error: page.errors.append(str(error)))
+            stub = 'window.Telegram={WebApp:new Proxy({initData:%s,initDataUnsafe:{},platform:"android",version:"8.0"},{get:(t,k)=>k in t?t[k]:new Proxy(()=>{},{get:(a,b)=>()=>{},apply:()=>undefined})})};' % json.dumps(init_data(user_id))
+            page.route('https://telegram.org/**', lambda route: route.fulfill(content_type='text/javascript', body=stub))
+            return context, page
+
+        def check_layout(page, name):
+            assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), f'Horizontal overflow: {name}'
+            small = page.evaluate("""[...document.querySelectorAll('#app *, #overlay-root *')].filter(n => [...n.childNodes].some(c => c.nodeType === 3 && c.textContent.trim()) && n.getClientRects().length && parseFloat(getComputedStyle(n).fontSize) < 11).length""")
+            assert small == 0, f'Text smaller than 11px: {name}'
+
+        # New free user: onboarding, then the checkout with the price from PRICE_RUB.
+        context, page = open_as(778)
+        page.goto(signed_url, wait_until='load')
+        page.get_by_text('Что для вас главное?').wait_for()
+        page.locator('[data-action="onb-answer"][data-id="own"]').click()
+        page.locator('[data-action="onb-answer"][data-id="none"]').click()
+        page.locator('[data-action="onb-home"]').click()
+        page.get_by_text('Пройдено 0 из 24 уроков').wait_for()
+        check_layout(page, 'home')
+        page.evaluate("location.hash = '#lessons'")
+        page.locator('[data-action="lesson"][data-id="6"]').click()
+        page.get_by_role('dialog').wait_for()
+        dialog = page.get_by_role('dialog').inner_text()
+        assert '1299' in dialog.replace(' ', '').replace('\u202f', '').replace('\xa0', '') and 'навсегда' in dialog, dialog
+        page.screenshot(path=str(out / 'checkout-390.png'), full_page=True)
+        assert not page.errors, page.errors
+        context.close()
+
+        # Admin: system check and saving the price.
+        for width, height in [(390, 844), (1280, 900)]:
+            context, page = open_as(777, width, height)
+            page.goto(signed_url + '#admin', wait_until='load')
+            page.get_by_role('tab', name='Система').click()
+            page.get_by_role('heading', name='Проверка системы').wait_for()
+            page.locator('.health-row').first.wait_for()
+            assert page.locator('.health-row.is-ok').count() >= 3, 'bot, channel and database must be green'
+            check_layout(page, f'admin-system-{width}')
+            page.screenshot(path=str(out / f'admin-system-{width}.png'), full_page=True)
+            page.get_by_role('tab', name='Акции').click()
+            page.locator('[name="priceRub"]').fill('1399')
+            page.get_by_role('button', name='Сохранить цену').click()
+            page.get_by_text('Цена и акция сохранены.').wait_for()
+            page.locator('[name="priceRub"]').fill('1299')
+            page.get_by_role('button', name='Сохранить цену').click()
+            page.get_by_text('Цена и акция сохранены.').wait_for()
+            assert not page.errors, page.errors
+            context.close()
+    finally:
+        server.terminate()
     browser.close()
-print(json.dumps({'viewports': [320, 390, 1280], 'result': 'PASS', 'flows': ['gate', 'home', 'real lesson', 'progress', 'paywall', 'search', 'resources', 'profile']}, ensure_ascii=False))
+print(json.dumps({'viewports': [320, 390, 1280], 'result': 'PASS', 'flows': ['gate', 'home', 'real lesson', 'progress', 'paywall', 'search', 'resources', 'profile', 'onboarding', 'checkout', 'admin system', 'admin price']}, ensure_ascii=False))
