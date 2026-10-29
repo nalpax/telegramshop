@@ -3,6 +3,7 @@ import { FREE_LESSONS, modules, lessons, materials } from './course.js';
 import { renderMarkdown } from './markdown.js';
 import { createAdmin, planBadge } from './admin.js';
 import { installProtection } from './protect.js';
+import { GROUPS, TERMS, linkTerms } from './glossary.js';
 import { mountPractice, practiceList, practicePaywall, practiceScreen, setPracticeData } from './practice.js';
 import { progress, saveProgress, complete, resetProgress, escape as e } from './state.js';
 
@@ -150,18 +151,31 @@ function catalogueBody(tab) {
   const query = search.trim().toLocaleLowerCase('ru');
   if (tab === 'prompts') return promptsBody(query);
   if (tab === 'base') return baseBody(query);
+  if (tab === 'terms') return termsBody(query);
   return modules.map(m => {
     const rows = lessons.filter(l => l.module === m.id && matches(query, l.title, l.id));
     if (!rows.length) return '';
     return `<section class="module-section">${moduleCover(m)}<div class="lesson-list">${rows.map(lessonRow).join('')}</div></section>`;
   }).join('') || emptySearch();
 }
+// «Термины»: open to everyone; the term from a lesson (#materials?tab=terms&term=id) is highlighted.
+let highlightTerm = '';
+function termsBody(query) {
+  const rows = TERMS.filter(t => matches(query, t.title, t.text));
+  const sections = GROUPS.map(([id, title]) => { const items = rows.filter(t => t.group === id); return items.length ? `<section class="module-section">${heading('', title, `${items.length} ${plural(items.length, 'термин', 'термина', 'терминов')}`)}<div class="term-list">${items.map(t => `<article class="term-card ${highlightTerm === t.id ? 'is-highlighted' : ''}" id="term-${t.id}"><h3>${e(t.title)}</h3><p>${e(t.text)}</p></article>`).join('')}</div></section>` : ''; }).join('');
+  return sections ? `<p class="practice-intro">Простые объяснения слов из уроков. В текстах такие слова подчёркнуты — нажмите на слово, чтобы увидеть объяснение.</p>${sections}` : emptySearch();
+}
+function openTerm(id) {
+  const t = TERMS.find(x => x.id === id); if (!t) return;
+  modal(e(t.title), `<p>${e(t.text)}</p><a class="button button-secondary" href="${urlFor('terms')}&term=${t.id}" data-action="all-terms">Все термины${icon('arrow')}</a>`);
+}
 function emptySearch() { return `<div class="empty-state">${icon('search')}<h2>Пока ничего не нашлось</h2><p>Попробуйте другое слово или номер.</p></div>`; }
-const TABS = [['lessons', 'Уроки'], ['prompts', 'Промпты'], ['base', 'База']];
-const PLACEHOLDER = { lessons: 'Найти урок', prompts: 'Найти промпт', base: 'Найти материал' };
+const TABS = [['lessons', 'Уроки'], ['prompts', 'Промпты'], ['base', 'База'], ['terms', 'Термины']];
+const PLACEHOLDER = { lessons: 'Найти урок', prompts: 'Найти промпт', base: 'Найти материал', terms: 'Найти термин' };
 function catalogue(params) {
   const tab = TABS.some(([id]) => id === params.get('tab')) ? params.get('tab') : 'lessons';
-  catalogueTab = tab;
+  catalogueTab = tab; highlightTerm = tab === 'terms' ? params.get('term') || '' : '';
+  if (highlightTerm) setTimeout(() => document.querySelector(`#term-${CSS.escape(highlightTerm)}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }), 60);
   loadLibrary(tab);
   const banner = session?.access?.active ? '' : `<button class="access-banner" data-action="access"><span class="access-icon">${icon('lock')}</span><span><strong>Откройте весь Vibentry</strong><small>Уроки ${String(FREE_LESSONS + 1).padStart(2, '0')}–24, 300 промптов и вся база${priceLabel() ? ' · ' + priceLabel() + ' навсегда' : ''}</small></span>${icon('arrow')}</button>`;
   return `<header class="page-header">${brand(true)}<div><h1>Материалы</h1><p>Всё, что нужно для вашего сайта</p></div></header><div class="catalogue-tools"><nav class="segments" aria-label="Тип материалов">${TABS.map(([id, label]) => `<a href="${urlFor(id)}" class="${tab === id ? 'selected' : ''}" ${tab === id ? 'aria-current="page"' : ''}>${label}</a>`).join('')}</nav><label class="search-box">${icon('search')}<input type="search" id="material-search" aria-label="${PLACEHOLDER[tab]}" placeholder="${PLACEHOLDER[tab]}" value="${e(search)}" autocomplete="off"></label></div><div id="catalogue-results">${catalogueBody(tab)}</div>${banner}${nav('materials')}`;
@@ -204,7 +218,7 @@ async function reader(id, epoch) {
   if (epoch !== renderEpoch) return;
   app.innerHTML = lessonHtml(id, meta, content);
   window.scrollTo({ top: 0, behavior: 'instant' });
-  wireChecklist(id); restoreScroll(id);
+  wireChecklist(id); linkTerms(app.querySelectorAll('.lesson-article .article-body, .lesson-article .practice-body')); restoreScroll(id);
 }
 async function articleReader(id, epoch) {
   const info = library.articles?.items.find(a => a.id === id);
@@ -217,6 +231,7 @@ async function articleReader(id, epoch) {
     const content = await response.json();
     if (epoch !== renderEpoch) return;
     const { html, codes } = copyBlocks(content.markdown); readerCodes = codes;
+    queueMicrotask(() => linkTerms(app.querySelectorAll('.lesson-article .article-body')));
     app.innerHTML = `<header class="reader-header"><a href="${urlFor('base')}" class="back-link">${icon('back')}База</a>${brand(true)}</header><article class="lesson-article"><div class="reader-meta"><span class="eyebrow">${e(String(content.groupTitle || 'БАЗА').toUpperCase())}</span></div><h1>${e(content.title)}</h1><div class="article-body">${html}</div><a class="button button-secondary" href="${urlFor('base')}">К списку материалов${icon('arrow')}</a></article>`;
     window.scrollTo({ top: 0, behavior: 'instant' });
   } catch { if (epoch === renderEpoch) app.innerHTML = `<header class="reader-header"><a href="${urlFor('base')}" class="back-link">${icon('back')}База</a>${brand(true)}</header>${errorPanel()}`; }
@@ -365,6 +380,8 @@ document.addEventListener('click', event => {
   if (action === 'more-prompts') { promptLimit += 30; refreshResults(); }
   if (action === 'favorite') toggleFavorite(target.dataset.id);
   if (action === 'task-item') toggleTask(target);
+  if (action === 'term') openTerm(target.dataset.id);
+  if (action === 'all-terms') { closeModal(false); go(target.getAttribute('href')); }
   if (action === 'article') { const info = library.articles?.items.find(a => a.id === target.dataset.id); if (info && !info.free && !session?.access?.active) return openAccess(); go('#article?id=' + target.dataset.id); }
   if (action === 'reload-library') loadLibrary(catalogueTab, true);
   if (action === 'copy-code') { const code = readerCodes[Number(target.dataset.index)]; if (code) copy(code); }

@@ -405,3 +405,10 @@ body.reading .lesson-article img{-webkit-user-drag:none;pointer-events:none}
 .admin-switch{display:flex;align-items:center;gap:10px;min-height:44px;font-weight:600}.admin-switch input{width:22px;height:22px;accent-color:var(--accent)}.admin-ladder{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.admin-ladder label{font-size:13px}.admin-ladder input{width:100%;min-width:0;box-sizing:border-box}
 .admin-card .admin-switch{display:flex;flex-direction:row;align-items:center;gap:10px}
 .funnel-row{padding:10px 0;border-bottom:1px solid var(--line-soft)}.funnel-row:last-of-type{border-bottom:0}.funnel-head{display:flex;justify-content:space-between;gap:10px;font-size:14px}.funnel-head strong{font-size:18px}.funnel-row progress{width:100%;margin:6px 0 2px}.funnel-row small{font-size:12px;color:var(--soft)}
+/* Термины */
+.term{display:inline;padding:0;margin:0;border:0;background:none;color:inherit;font:inherit;line-height:inherit;text-decoration:underline dotted var(--accent);text-decoration-thickness:1.5px;text-underline-offset:3px;cursor:help;-webkit-tap-highlight-color:transparent}
+.term:hover,.term:focus-visible{color:var(--accent);outline:none}
+.term-list{display:grid;gap:8px}.term-card{padding:12px 14px;border:1px solid var(--border);border-radius:14px;background:var(--surface);scroll-margin:90px}.term-card h3{font-size:16px;margin:0 0 4px}.term-card p{margin:0;color:var(--muted);font-size:14px;line-height:1.5}
+.term-card.is-highlighted{border-color:var(--accent);animation:glow 1.6s ease-out}
+.segments a{min-width:0;padding-left:4px;padding-right:4px;white-space:nowrap}
+@media (min-width:1024px){.term-list{grid-template-columns:1fr 1fr}}
