@@ -396,3 +396,5 @@ body.reading .lesson-article img{-webkit-user-drag:none;pointer-events:none}
 .p-row{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}.p-total{display:flex;flex-direction:column;gap:2px}.p-total span{font-size:13px;color:var(--soft)}.p-total strong{font-size:28px;color:var(--gold)}
 @media (min-width:1024px){.practice-grid{grid-template-columns:1fr 1fr}}
 .p-field input,.p-task input{width:100%;min-width:0;box-sizing:border-box}.p-row>*,.p-task>*{min-width:0}@media (max-width:420px){.p-row{grid-template-columns:1fr}}
+.pay-stub{display:flex;gap:10px;align-items:flex-start;margin:10px 0 0;padding:12px 14px;border:1px solid var(--gold);border-radius:12px;background:#2a2a14;color:var(--text);font-size:14px;line-height:1.45;text-align:left;animation:rise .2s ease-out both}.pay-stub .icon{flex:none;color:var(--gold)}.pay-stub p{margin:0}
+.doc-buy{display:inline-flex;align-items:center;justify-content:center;min-height:48px;margin-top:12px;padding:0 20px;border-radius:14px;background:var(--accent);color:var(--accent-ink)!important;font-weight:700;text-decoration:none}

@@ -68,7 +68,9 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
   const articleList = () => ({ items: articles.map(({ id, group, groupTitle, title, description, free }) => ({ id, group, groupTitle, title, description, free: !!free })) });
   const pending = new Set();
   const recent = new Map();
-  return async function api(request, response, url, json, body) {
+  // What is sold and whether it can be bought right now: the bot's tariff screen uses the same facts as the app.
+  const purchaseInfo = () => ({ prices: pricesFor(store), ready: !!(contentReady && channelsFor(store).length > 0 && methodsFor().length > 0), course: { lessons: 24, freeLessons: FREE_LESSONS, prompts: promptIndex.size, articles: articleIndex.size } });
+  const handler = async function api(request, response, url, json, body) {
     if (!url.pathname.startsWith('/api/')) return false;
     const send = (status, data) => { json(response, status, data); return true; };
     const preview = !process.env.BOT_TOKEN && process.env.NODE_ENV !== 'production';
@@ -307,4 +309,6 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
     } catch (error) { if (method.id !== 'stars') return send(502, { error: 'Payment provider is unavailable' }); throw error; }
     finally { pending.delete(user.id); }
   };
+  handler.purchaseInfo = purchaseInfo;
+  return handler;
 }

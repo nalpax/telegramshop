@@ -160,3 +160,13 @@ test('Worker: the webhook is re-set when reminder buttons (callback_query) are m
   assert.equal(await handle.reminders(now), 1);
   assert.match(calls.at(-1).payload.text, /уроке 02 «Второй»/);
 });
+test('Worker: the bot\'s tariff uses the real price and the pay button is a stub while no method is live', async () => {
+  process.env.PRICE_RUB = '1299';
+  const calls = []; const api = async (method, payload) => { calls.push({ method, payload }); return method === 'getWebhookInfo' ? { url: APP + WEBHOOK_PATH, allowed_updates: ['message', 'pre_checkout_query', 'callback_query'] } : true; };
+  const handle = makeWorkerApp({ store: new Store(':memory:'), telegram: { isMember: async () => true, api }, content: {}, env: { BOT_TOKEN: TOKEN, APP_URL: APP }, log: () => {} });
+  await handle(hook({ update_id: 1, message: { chat: { id: 9, type: 'private' }, from: { id: 9 }, text: '/tariff' } }));
+  assert.match(calls.find(c => c.method === 'sendMessage').payload.text, /1\s299 ₽/u);
+  await handle(hook({ update_id: 2, callback_query: { id: 'q', from: { id: 9 }, data: 'pay', message: { chat: { id: 9 } } } }));
+  assert.match(calls.find(c => c.method === 'answerCallbackQuery').payload.text, /Оплата пока недоступна/);
+  delete process.env.PRICE_RUB;
+});

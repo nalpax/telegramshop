@@ -82,7 +82,7 @@ export function makeWorkerApp({ store, telegram, content, env = process.env, log
       try { update = await body(await nodeRequest(request)); } catch { return reply(400, { error: 'Bad update' }); }
       // Always 200 once the secret matched: a failed reply (e.g. the user blocked the bot) must not stall Telegram's queue.
       // Payments are idempotent, so a later redelivery is harmless anyway.
-      try { await handleUpdate(update, { api: telegramApi, store, appUrl, support: env.SUPPORT_USERNAME, log }); }
+      try { await handleUpdate(update, { api: telegramApi, store, appUrl, support: env.SUPPORT_USERNAME, log, purchase: api.purchaseInfo }); }
       catch (error) { log(`Update handling failed (code ${Number(error.code) || 'internal'}). Update bodies are not logged.`); }
       return reply(200, { ok: true });
     }

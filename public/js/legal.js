@@ -19,7 +19,7 @@ async function fill() {
   $$('[data-legal="support-telegram"]').forEach(a => { a.href = `https://t.me/${support.telegram}`; });
   if (support.email) { set('support-email', support.email); $$('[data-legal="support-email"]').forEach(a => { a.href = `mailto:${support.email}`; }); }
   show('support-email', !!support.email);
-  if (support.bot) { set('bot', '@' + support.bot); $$('[data-legal="bot"]').forEach(a => { a.href = `https://t.me/${support.bot}`; }); }
+  if (support.bot) { set('bot', '@' + support.bot); $$('[data-legal="bot"]').forEach(a => { a.href = `https://t.me/${support.bot}`; }); $$('[data-legal="buy"]').forEach(a => { a.href = `https://t.me/${support.bot}?start=buy`; }); }
   show('bot', !!support.bot);
   set('prompts', String(course.prompts || 300)); set('articles', String(course.articles || '')); set('free-lessons', String(course.freeLessons));
   show('articles', !!course.articles);
