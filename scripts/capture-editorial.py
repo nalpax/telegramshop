@@ -7,7 +7,7 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 base = os.environ.get('BASE_URL', 'http://127.0.0.1:3000')
-out = Path('handoff/screenshots/editorial')
+out = Path(os.environ.get('SCREENSHOT_DIR', 'handoff/screenshots/editorial'))
 out.mkdir(parents=True, exist_ok=True)
 
 with sync_playwright() as p:
