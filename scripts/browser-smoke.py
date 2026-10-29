@@ -136,6 +136,13 @@ with sync_playwright() as p:
             assert page.locator('.health-row.is-ok').count() >= 3, 'bot, channel and database must be green'
             check_layout(page, f'admin-system-{width}')
             page.screenshot(path=str(out / f'admin-system-{width}.png'), full_page=True)
+            page.get_by_role('tab', name='Воронка').click()
+            page.locator('.funnel-row').first.wait_for()
+            assert page.locator('.funnel-row').count() == 6 and page.locator('.funnel-tr').count() == 25
+            check_layout(page, f'admin-funnel-{width}')
+            page.screenshot(path=str(out / f'admin-funnel-{width}.png'), full_page=True)
+            page.get_by_role('button', name='7 дней').click()
+            page.locator('.funnel-row').first.wait_for()
             page.get_by_role('tab', name='Акции').click()
             page.locator('[name="priceRub"]').fill('1399')
             page.get_by_role('button', name='Сохранить цену').click()
@@ -148,4 +155,4 @@ with sync_playwright() as p:
     finally:
         server.terminate()
     browser.close()
-print(json.dumps({'viewports': [320, 390, 1280], 'result': 'PASS', 'flows': ['gate', 'home', 'real lesson', 'progress', 'paywall', 'search', 'resources', 'profile', 'onboarding', 'checkout', 'favorites', 'recently opened', 'admin system', 'admin price']}, ensure_ascii=False))
+print(json.dumps({'viewports': [320, 390, 1280], 'result': 'PASS', 'flows': ['gate', 'home', 'real lesson', 'progress', 'paywall', 'search', 'resources', 'profile', 'onboarding', 'checkout', 'favorites', 'recently opened', 'admin system', 'admin funnel', 'admin price']}, ensure_ascii=False))

@@ -5,6 +5,9 @@ import { fingerprint } from './fingerprint.mjs';
 import { FREE_PRACTICE_LAUNCHES, HANDOVER, QUIZ, TRAINER_IDS } from './practice-data.mjs';
 import { MAX_OFFER_PERCENT, offerSettings } from './offers.mjs';
 import { FAVORITES_LIMIT, FAVORITE_KINDS } from './store-core.mjs';
+
+const CLIENT_EVENTS = ['app_open', 'lesson_open', 'paywall_view', 'checkout_start'];
+const CHECKOUT_METHODS = ['stars', 'platega', 'cryptobot', 'xrocket', 'stub'];
 import { sendBackup } from './backup.mjs';
 import { weekPlanMessage } from './bot-core.mjs';
 // Course content is passed in by the host: server/content-node.mjs reads data/ for Node, the Cloudflare build bundles it.
@@ -31,7 +34,7 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
   }
   // Scraping guard: a real reader opens a handful of pages; a script pulls everything in seconds.
   const windows = new Map();
-  const limits = { content: 40, prompts: 200, favorites: 120 };
+  const limits = { content: 40, prompts: 200, favorites: 120, events: 120 };
   function overLimit(userId, bucket) {
     const key = `${bucket}:${userId}`; const now = Date.now(); const hits = (windows.get(key) || []).filter(time => now - time < 600000);
     hits.push(now); windows.set(key, hits);
@@ -163,10 +166,11 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
       if (route === 'funnel' && get) {
         const days = Number.parseInt(url.searchParams.get('days') || '', 10);
         const admins = (process.env.ADMIN_IDS || '').split(',').map(s => Number(s.trim())).filter(Number.isSafeInteger);
-        const f = store.funnel(days > 0 ? Date.now() - days * 86400000 : 0, FREE_LESSONS, admins);
-        const labels = [['opened', 'Открыли приложение'], ['subscribed', 'Подписались на канал'], ['lesson1', 'Прошли урок 01'], ['free', `Прошли бесплатную часть (01–${String(FREE_LESSONS).padStart(2, '0')})`], ['tariff', 'Открыли тариф'], ['pay', 'Нажали «Оплатить»'], ['bought', 'Купили']];
-        const pct = (a, b) => (b ? Math.round(a / b * 100) : 0);
-        return send(200, { days: days > 0 ? days : null, steps: labels.map(([id, label], i) => ({ id, label, count: f[id], ofTotal: pct(f[id], f.opened), ofPrevious: i ? pct(f[id], f[labels[i - 1][0]]) : 100 })), offers: store.offerStats() });
+        const f = store.funnel(days > 0 ? Date.now() - days * 86400000 : 0, admins);
+        const labels = [['app_open', 'Открыли приложение'], ['lesson1_open', 'Открыли урок 1'], ['lesson1_done', 'Прошли урок 1'], ['paywall_view', 'Увидели оплату'], ['checkout_start', 'Начали оплату'], ['paid', 'Оплатили']];
+        // Conversion from the previous step; null when the previous step is 0 (nothing to divide by — shown as «—»).
+        const pct = (a, b) => (b ? Math.round(a / b * 1000) / 10 : null);
+        return send(200, { days: days > 0 ? days : null, steps: labels.map(([id, label], i) => ({ id, label, count: f.steps[id], fromPrevious: i ? pct(f.steps[id], f.steps[labels[i - 1][0]]) : null })), lessons: f.lessons.map(l => ({ ...l, title: lessons[l.id - 1]?.title || '' })), methods: f.methods, promos: f.promos, offers: store.offerStats() });
       }
       if (route === 'users' && get) {
         const plan = ['all', 'free', 'pro'].includes(url.searchParams.get('plan')) ? url.searchParams.get('plan') : 'all';
@@ -284,10 +288,15 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
       return send(404, { error: 'Unknown API endpoint' });
     }
     // Funnel events from the app. The tariff can be opened before subscribing, so this comes before the subscription check.
+    // lesson_done, paid and promo_applied are written by the server itself (progress, confirmed payment, valid code).
     if (url.pathname === '/api/event') {
-      if (!['tariff_open', 'pay_click'].includes(data.step)) return send(400, { error: 'Unknown step' });
-      store.upsertUser(user); store.markStep(user.id, data.step);
-      return send(200, { ok: true });
+      const type = data.type; let meta = null;
+      if (!CLIENT_EVENTS.includes(type)) return send(400, { error: 'Unknown event type' });
+      if (type === 'lesson_open') { if (!Number.isInteger(data.meta) || data.meta < 1 || data.meta > 24) return send(400, { error: 'Invalid lesson' }); meta = String(data.meta); }
+      if (type === 'checkout_start') { if (!CHECKOUT_METHODS.includes(data.meta)) return send(400, { error: 'Invalid method' }); meta = data.meta; }
+      if (overLimit(user.id, 'events')) return send(429, { error: 'Слишком много запросов подряд. Подождите несколько минут.' });
+      store.upsertUser(user); store.addEvent(user.id, type, meta);
+      response.writeHead(204, { 'Cache-Control': 'no-store' }); response.end(); return true;
     }
     if (['/api/session', '/api/practice', '/api/onboarding'].includes(url.pathname)) store.upsertUser(user);
     let subscribed;
@@ -300,7 +309,6 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
       subscribed = false; subscriptionUnavailable = true;
     }
     const access = store.entitlement(user.id);
-    if (subscribed && url.pathname === '/api/session') store.markStep(user.id, 'subscribed');
     const practice = () => ({ unlimited: !!access.active, limit: FREE_PRACTICE_LAUNCHES, remaining: Math.max(0, FREE_PRACTICE_LAUNCHES - store.practiceUsed(user.id)) });
     if (url.pathname === '/api/session') return send(200, { user, subscribed, access, done: store.getProgress(user.id), isAdmin: isAdmin(user.id), practice: practice(), onboarding: store.onboarding(user.id), personalOffer: (({ code, percent, expires_at } = {}) => (code ? { code, percent, expiresAt: expires_at } : null))(store.activePersonalPromo(user.id) || undefined), ...(subscriptionUnavailable ? { subscriptionUnavailable } : {}) });
     if (!subscribed) return send(403, { error: 'Channel subscription required', reason: 'channel' });
@@ -397,6 +405,7 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
       const result = applyPromo(store, data.promo, 100, Date.now(), user.id);
       if (result.error) return send(400, { error: result.error });
       promoCode = result.code; promoPercent = result.percent;
+      if (url.pathname === '/api/promo') store.addEvent(user.id, 'promo_applied', promoCode);
       if (url.pathname === '/api/promo') return send(200, { code: promoCode, percent: promoPercent, methods: methodsFor(promoPercent) });
     }
     if (url.pathname === '/api/promo') return send(400, { error: 'Введите промокод' });

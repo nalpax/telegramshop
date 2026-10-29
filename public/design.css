@@ -379,3 +379,24 @@ progress::-moz-progress-bar{background:var(--accent);border-radius:4px}
 .recent-kind{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3)}
 .recent-kind .icon{width:14px;height:14px}
 .recent-item strong{font-size:14px;font-weight:600;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+
+/* ---- v1.1: вкладка «Воронка» ---- */
+.funnel-list{margin-top:8px}
+.funnel-row progress{-webkit-appearance:none;appearance:none;height:8px;border:0;border-radius:4px;background:var(--surface-2);overflow:hidden}
+.funnel-row progress::-webkit-progress-bar{background:var(--surface-2);border-radius:4px}
+.funnel-row progress::-webkit-progress-value{background:var(--ink-3);border-radius:4px}
+.funnel-row progress::-moz-progress-bar{background:var(--ink-3);border-radius:4px}
+.funnel-row.is-last progress::-webkit-progress-value{background:var(--accent)}
+.funnel-row.is-last progress::-moz-progress-bar{background:var(--accent)}
+.funnel-row small{font-size:12px;color:var(--ink-3)}
+.funnel-table{font-size:13px;margin-top:4px}
+.funnel-tr{display:grid;grid-template-columns:minmax(0,1fr) 64px 64px;gap:8px;align-items:center;min-height:40px;padding:6px 0;border-bottom:1px solid var(--line)}
+.funnel-tr span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-2)}
+.funnel-tr span:first-child b{color:var(--ink);font-weight:600;margin-right:4px}
+.funnel-tr span+span{text-align:right;font-variant-numeric:tabular-nums}
+.funnel-tr.is-head{min-height:32px;font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3)}
+.funnel-tr.is-head span:first-child{color:var(--ink-3)}
+.funnel-pairs{margin:4px 0 14px}
+.funnel-pair{display:flex;justify-content:space-between;gap:12px;align-items:center;min-height:44px;padding:8px 0;border-bottom:1px solid var(--line);font-size:14px}
+.funnel-pair strong{font-weight:600;text-align:right;font-variant-numeric:tabular-nums}
+.admin-card h2+.funnel-pairs{margin-top:8px}.funnel-pairs+h2{margin-top:18px}

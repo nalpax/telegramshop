@@ -10,6 +10,7 @@ const store = new Store(':memory:');
 store.saveChannels([{ chatId: '@smokechannel', url: 'https://t.me/smokechannel', title: 'Канал' }]);
 store.upsertUser({ id: 777, first_name: 'Владелец' }); store.setOnboarding(777, 'earn', 'tried');
 store.upsertUser({ id: 779, first_name: 'Покупатель' }); store.setOnboarding(779, 'own', 'none'); store.grantAccess(779);
+for (const id of [778, 779]) store.addEvent(id, 'app_open'); store.addEvent(779, 'lesson_open', '1'); store.complete(779, 1); // a little for «Воронка»
 const replies = { getMe: { id: 1, username: 'vibentry_bot' }, getChatMember: { status: 'administrator' }, getWebhookInfo: { url: '' }, createInvoiceLink: 'https://t.me/$smoke' };
 const telegram = { isMember: async () => true, api: async method => replies[method] ?? true, upload: async () => true };
 const port = Number(process.argv[2] || 3001);

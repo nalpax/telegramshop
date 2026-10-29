@@ -306,7 +306,7 @@ async function reader(id, epoch) {
     } catch { if (epoch === renderEpoch) app.innerHTML = `<a href="${urlFor()}" class="back-link">${icon('back')}Все уроки</a>${errorPanel()}`; return; }
   }
   if (epoch !== renderEpoch) return;
-  app.innerHTML = lessonHtml(id, meta, content); pushOpened('lesson', id, meta.title);
+  app.innerHTML = lessonHtml(id, meta, content); pushOpened('lesson', id, meta.title); track('lesson_open', id);
   window.scrollTo({ top: 0, behavior: 'instant' });
   wireChecklist(id); linkTerms(app.querySelectorAll('.lesson-article .article-body, .lesson-article .practice-body')); restoreScroll(id);
 }
@@ -378,15 +378,20 @@ function payArea() {
   const sale = method && method.regular && method.regular > method.amount;
   return `${list.length > 1 ? `<div class="method-list" role="radiogroup" aria-label="Способ оплаты">${list.map(m => `<button class="method ${m.id === method.id ? 'is-active' : ''}" role="radio" aria-checked="${m.id === method.id}" data-action="method" data-id="${m.id}"><span>${e(m.title)}</span><strong>${e(money(m.amount, m))}</strong></button>`).join('')}</div>` : ''}<div class="price-block">${sale ? `<del>${e(money(method.regular, method))}</del><span class="sale-badge">−${Math.round((1 - method.amount / method.regular) * 100)}%</span>` : ''}<strong>${method ? e(money(method.amount, method)) : e(priceLabel() || 'Скоро')}</strong><span>разовая покупка · навсегда</span></div><div class="promo-box"><label>Есть промокод?<span><input id="promo-input" maxlength="24" autocapitalize="characters" autocomplete="off" placeholder="Введите код" value="${e(promoApplied || '')}"><button class="mini-button" data-action="apply-promo">Применить</button></span></label><output id="promo-result" aria-live="polite"></output></div><p class="billing-note">Один платёж навсегда. Доступ привязан к вашему аккаунту Telegram и не передаётся другому человеку.</p>${ready ? `<button class="button button-primary" data-action="pay">Оплатить ${e(money(method.amount, method))}${icon('arrow')}</button>` : `<button class="button button-primary" data-action="pay-stub">${priceLabel() ? 'Оплатить ' + e(priceLabel()) : 'Оплатить'}${icon('arrow')}</button><div class="pay-stub is-hidden" id="pay-stub" role="status">${icon('clock')}<p><strong>Оплата пока недоступна.</strong> Платёжная система подключается, деньги не списаны. Как только оплата заработает, эта кнопка поведёт на страницу оплаты.</p></div>`}`;
 }
-// Funnel events (once per app session); the server keeps only the first time anyway.
+// Funnel events (admin «Воронка»): once per app session per type and meta; the server also keeps app_open and paywall_view
+// to once a day. Only the type and a lesson number or payment method are sent. The answer is 204 with no body.
 const sentEvents = new Set();
-function track(step) { if (config.preview || !tg?.initData || sentEvents.has(step)) return; sentEvents.add(step); sendApi('/api/event', { step }).catch(() => sentEvents.delete(step)); }
+function track(type, meta) {
+  const key = `${type}:${meta ?? ''}`;
+  if (config.preview || !tg?.initData || sentEvents.has(key)) return; sentEvents.add(key);
+  fetch('/api/event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type, ...(meta != null ? { meta } : {}), initData: tg.initData }) }).then(r => { if (!r.ok) sentEvents.delete(key); }, () => sentEvents.delete(key));
+}
 function openAccess(promo = null) {
   methods = []; selectedMethod = (config.methods || [])[0]?.id || 'stars';
   promoApplied = null;
   const personal = session?.personalOffer && Date.parse(session.personalOffer.expiresAt) > Date.now() ? session.personalOffer : null;
   const active = session?.access?.active;
-  if (!active) track('tariff_open');
+  if (!active) track('paywall_view');
   modal(active ? 'Ваш доступ открыт' : 'Тариф «Полный доступ»', `<p>${active ? 'Все уроки, промпты и материалы открыты в приложении. Доступ остаётся у вас навсегда.' : 'От первой страницы до портфолио, клиентов и сдачи проекта. Продолжите свой маршрут.'}</p><div class="access-benefits">${['Все 24 урока курса', '300 промптов и рабочие шаблоны', 'База: инструменты, ниши, клиенты, заказы', '«Практикум» без ограничений', 'Прогресс в вашем Telegram'].map(t => `<div>${icon('check')}<span>${t}</span></div>`).join('')}</div>${active ? `<p>${session.access.expiresAt ? 'Оплачен до ' + new Date(session.access.expiresAt * 1000).toLocaleDateString('ru-RU') : 'Разовая покупка · без ограничения срока'}</p><a class="button button-primary" href="#materials">К урокам${icon('arrow')}</a>` : `${personal ? `<div class="personal-offer">${icon('sparkle')}<p><strong>Ваша скидка ${personal.percent}%</strong> по коду ${e(personal.code)} — до ${e(new Date(personal.expiresAt).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' }))}</p></div>` : ''}<div id="pay-area">${payArea()}</div><p class="modal-note">Оплата через Telegram Stars, карту, СБП или криптовалюту. Курс не гарантирует заказы и доход. Оплачивая, вы принимаете <a href="${location.origin}/terms.html" data-external>пользовательское соглашение</a> и <a href="${location.origin}/privacy.html" data-external>политику конфиденциальности</a>.</p>`}<button class="text-link support-link" data-action="support">Вопросы об оплате</button>`);
   const code = promo || personal?.code;
   if (code && !active && config.methods?.length) { const input = document.querySelector('#promo-input'); const button = document.querySelector('[data-action="apply-promo"]'); if (input && button) { input.value = code; applyPromoCode(button); } }
@@ -452,7 +457,7 @@ document.addEventListener('click', event => {
   if (action === 'access') openAccess();
   if (action === 'check-subscription') checkSubscription(target);
   if (action === 'preview') { previewEntered = true; render(); }
-  if (action === 'pay' || action === 'pay-stub') track('pay_click');
+  if (action === 'pay' || action === 'pay-stub') track('checkout_start', action === 'pay-stub' ? 'stub' : selectedMethod);
   if (action === 'pay') pay(target);
   if (action === 'pay-stub') { const note = document.querySelector('#pay-stub'); note?.classList.remove('is-hidden'); note?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); try { tg?.HapticFeedback.notificationOccurred('warning'); } catch {} }
   if (action === 'quick-copy') quickCopy(target.dataset.id, target);
@@ -548,7 +553,7 @@ async function refreshConfig() { const response = await fetch('/api/config'); if
 const protection = installProtection(() => session?.user || null);
 const admin = createAdmin({ sendApi, getApi, toast, modal, closeModal, config: { get regularPriceStars() { return config.regularPriceStars; } }, refreshConfig, getSession: () => session });
 async function refreshSession() {
-  const data = await sendApi('/api/session'); session = data; protection.refresh();
+  const data = await sendApi('/api/session'); session = data; protection.refresh(); track('app_open');
   if (data.practice?.unlimited) practiceBlocked.clear();
   if (!config.preview) { progress.done = data.done || []; progress.last = Math.min(24, (progress.done.at(-1) || 0) + 1); }
   await Promise.all([loadMarks(), loadFavorites()]);

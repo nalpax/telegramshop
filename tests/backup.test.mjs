@@ -14,7 +14,7 @@ function filled() {
   const store = new Store(':memory:');
   store.upsertUser({ id: 5, first_name: 'Анна', username: 'anna_test' }); store.complete(5, 1); store.setFavorite(5, '001', true);
   const order = store.createOrder(5, 100, 'one_time'); store.recordPayment(5, { invoice_payload: order.id, currency: 'XTR', total_amount: 100, telegram_payment_charge_id: 'b1' });
-  store.savePromo({ code: 'START20', percent: 20 }); store.saveSettings({ priceStars: 100, discountPercent: 0 }); store.markStep(5, 'subscribed');
+  store.savePromo({ code: 'START20', percent: 20 }); store.saveSettings({ priceStars: 100, discountPercent: 0 }); store.addEvent(5, 'app_open');
   return store;
 }
 test('A backup restores into an empty database with purchases, progress and settings intact', () => {

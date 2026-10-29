@@ -3,10 +3,14 @@ import { randomUUID } from 'node:crypto';
 // Platform-neutral store. `db` is anything with exec(sql) and prepare(sql).get/all/run(...args) -> {changes}:
 // node:sqlite on a server (server/store.mjs), Durable Object SQLite on Cloudflare (server/durable-sql.mjs).
 // Every table with data worth keeping, parents before children (orders before payments and invoices).
-export const BACKUP_TABLES = ['users', 'orders', 'payments', 'refunds', 'provider_invoices', 'progress', 'settings', 'promo_codes', 'audit', 'favorites', 'task_checks', 'funnel_events'];
+export const BACKUP_TABLES = ['users', 'orders', 'payments', 'refunds', 'provider_invoices', 'progress', 'settings', 'promo_codes', 'audit', 'favorites', 'task_checks', 'events'];
 export const FAVORITE_KINDS = ['prompt', 'lesson', 'article'];
 export const FAVORITES_LIMIT = 200;
 const FAVORITES_COLUMNS = 'user_id INTEGER NOT NULL, kind TEXT NOT NULL, item_id TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY(user_id, kind, item_id)';
+// Funnel events (admin «Воронка»). Only a numeric user id, a type and a short meta — no names or texts.
+export const EVENT_TYPES = ['app_open', 'lesson_open', 'lesson_done', 'paywall_view', 'checkout_start', 'paid', 'promo_applied'];
+// Kept at most once per 24 hours per user (and per meta for lesson_open), so reopening the app does not inflate the numbers.
+const DAILY_EVENTS = ['app_open', 'paywall_view', 'lesson_open', 'promo_applied'];
 export class StoreCore {
   constructor(db) {
     this.db = db;
@@ -32,8 +36,17 @@ export class StoreCore {
       INSERT OR IGNORE INTO favorites SELECT user_id, 'prompt', prompt_id, created_at FROM favorites_v0;
       DROP TABLE favorites_v0;`);
     this.db.exec(`CREATE TABLE IF NOT EXISTS favorites (${FAVORITES_COLUMNS});
-      CREATE TABLE IF NOT EXISTS funnel_events (user_id INTEGER NOT NULL, step TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY(user_id, step));
       CREATE TABLE IF NOT EXISTS task_checks (user_id INTEGER NOT NULL, lesson_id INTEGER NOT NULL, item INTEGER NOT NULL, PRIMARY KEY(user_id, lesson_id, item));`);
+    this.db.exec(`CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, type TEXT NOT NULL, meta TEXT, at INTEGER NOT NULL);
+      CREATE INDEX IF NOT EXISTS events_type_at ON events(type, at);
+      CREATE INDEX IF NOT EXISTS events_user_type ON events(user_id, type);`);
+    // v1.0 kept only the first time per step (funnel_events). Move what maps onto the new types, rebuild lesson_done and paid
+    // from progress and payments, then drop the old table. Runs once.
+    let legacyFunnel = false; try { this.db.prepare('SELECT step FROM funnel_events LIMIT 0').all(); legacyFunnel = true; } catch {}
+    if (legacyFunnel) this.db.exec(`INSERT INTO events (user_id, type, meta, at) SELECT user_id, CASE step WHEN 'tariff_open' THEN 'paywall_view' ELSE 'checkout_start' END, NULL, at FROM funnel_events WHERE step IN ('tariff_open', 'pay_click');
+      INSERT INTO events (user_id, type, meta, at) SELECT user_id, 'lesson_done', CAST(lesson_id AS TEXT), completed_at FROM progress;
+      INSERT INTO events (user_id, type, meta, at) SELECT user_id, 'paid', provider, paid_at * 1000 FROM payments WHERE provider != 'manual';
+      DROP TABLE funnel_events;`);
     this.db.exec("CREATE TABLE IF NOT EXISTS provider_invoices (provider TEXT NOT NULL, external_id TEXT NOT NULL, order_id TEXT NOT NULL REFERENCES orders(id), created_at INTEGER NOT NULL, PRIMARY KEY(provider, external_id))");
   }
   createOrder(userId, stars, mode, promo = null) { const id = randomUUID(); this.db.prepare('INSERT INTO orders (id,user_id,stars,mode,created_at,promo) VALUES (?,?,?,?,?,?)').run(id, userId, stars, mode, Date.now(), promo); return this.order(id); }
@@ -50,6 +63,7 @@ export class StoreCore {
     // Idempotency: Telegram may deliver the same update again after a restart.
     const inserted = this.db.prepare("INSERT OR IGNORE INTO payments (charge_id,order_id,user_id,stars,expires_at,paid_at,provider,amount,currency) VALUES (?,?,?,?,?,?,'stars',?,'XTR')").run(payment.telegram_payment_charge_id, order.id, userId, order.stars, expiry, now, order.stars).changes;
     if (inserted && order.promo) this.db.prepare('UPDATE promo_codes SET used = used + 1 WHERE code = ?').run(order.promo);
+    if (inserted) this.addEvent(userId, 'paid', 'stars', now * 1000);
     return true;
   }
   // ---- external providers (Platega, CryptoBot, xRocket) ----
@@ -68,12 +82,13 @@ export class StoreCore {
     if (!order || order.provider !== provider || order.currency !== currency || !Number.isFinite(amount) || Math.abs(amount - order.amount) > 0.005) return false;
     const inserted = this.db.prepare('INSERT OR IGNORE INTO payments (charge_id,order_id,user_id,stars,expires_at,paid_at,provider,amount,currency) VALUES (?,?,?,0,NULL,?,?,?,?)').run(`${provider}:${externalId}`, order.id, order.user_id, now, provider, order.amount, order.currency).changes;
     if (inserted && order.promo) this.db.prepare('UPDATE promo_codes SET used = used + 1 WHERE code = ?').run(order.promo);
+    if (inserted) this.addEvent(order.user_id, 'paid', provider, now * 1000);
     return inserted ? 'new' : 'duplicate';
   }
   providerState() { try { return JSON.parse(this.db.prepare("SELECT value FROM settings WHERE key='providers'").get()?.value || '{}'); } catch { return {}; } }
   saveProviderState(state) { this.db.prepare("INSERT INTO settings VALUES ('providers',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify(state)); }
   getProgress(userId) { return this.db.prepare('SELECT lesson_id FROM progress WHERE user_id=? ORDER BY lesson_id').all(userId).map(r => r.lesson_id); }
-  complete(userId, lesson) { this.db.prepare('INSERT OR IGNORE INTO progress VALUES (?,?,?)').run(userId, lesson, Date.now()); }
+  complete(userId, lesson, now = Date.now()) { if (this.db.prepare('INSERT OR IGNORE INTO progress VALUES (?,?,?)').run(userId, lesson, now).changes) this.addEvent(userId, 'lesson_done', String(lesson), now); }
   reset(userId) { this.db.prepare('DELETE FROM progress WHERE user_id=?').run(userId); this.db.prepare('DELETE FROM task_checks WHERE user_id=?').run(userId); }
   // ---- reminders: one message after a quiet pause (server/bot-core.mjs sendReminders) ----
   reminderCandidates() {
@@ -106,22 +121,29 @@ export class StoreCore {
   webhookSeen(provider) { return Number(this.db.prepare('SELECT value FROM settings WHERE key=?').get('webhook_seen_' + provider)?.value) || 0; }
   probeWrite(now = Date.now()) { this.db.prepare("INSERT INTO settings VALUES ('health_probe',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(String(now)); return Number(this.db.prepare("SELECT value FROM settings WHERE key='health_probe'").get()?.value) === now; }
   lastPaidAt() { return this.db.prepare("SELECT MAX(paid_at) AS at FROM payments WHERE provider != 'manual' AND charge_id NOT IN (SELECT charge_id FROM refunds)").get()?.at || 0; }
-  // ---- funnel: the first time each person reaches a step ----
-  markStep(userId, step, now = Date.now()) { this.db.prepare('INSERT OR IGNORE INTO funnel_events VALUES (?,?,?)').run(userId, step, now); }
-  // Administrators are left out: the owner tests the app all the time and would skew the numbers.
-  funnel(since = 0, freeLessons = 5, exclude = []) {
+  // ---- funnel events ----
+  addEvent(userId, type, meta = null, now = Date.now()) {
+    if (!EVENT_TYPES.includes(type) || !Number.isSafeInteger(userId)) return false;
+    meta = meta == null ? null : String(meta).slice(0, 32);
+    if (DAILY_EVENTS.includes(type) && this.db.prepare('SELECT 1 FROM events WHERE user_id=? AND type=? AND meta IS ? AND at > ? LIMIT 1').get(userId, type, meta, now - 86400000)) return false;
+    this.db.prepare('INSERT INTO events (user_id, type, meta, at) VALUES (?,?,?,?)').run(userId, type, meta, now);
+    return true;
+  }
+  // Unique people per step since `since` (ms). Administrators are left out: the owner tests the app all the time.
+  funnel(since = 0, exclude = []) {
     const ids = exclude.filter(Number.isSafeInteger).join(',') || '0';
-    const cohort = `SELECT id FROM users WHERE first_seen >= ? AND id NOT IN (${ids})`;
-    const n = (sql, ...args) => this.db.prepare(sql).get(...args).n;
-    const step = name => n(`SELECT COUNT(*) AS n FROM funnel_events WHERE step=? AND user_id IN (${cohort})`, name, since);
-    return {
-      opened: n(`SELECT COUNT(*) AS n FROM (${cohort})`, since),
-      subscribed: step('subscribed'),
-      lesson1: n(`SELECT COUNT(DISTINCT user_id) AS n FROM progress WHERE lesson_id=1 AND user_id IN (${cohort})`, since),
-      free: n(`SELECT COUNT(*) AS n FROM (SELECT user_id FROM progress WHERE lesson_id <= ? AND user_id IN (${cohort}) GROUP BY user_id HAVING COUNT(*) = ?)`, freeLessons, since, freeLessons),
-      tariff: step('tariff_open'), pay: step('pay_click'),
-      bought: n(`SELECT COUNT(DISTINCT user_id) AS n FROM payments WHERE provider != 'manual' AND charge_id NOT IN (SELECT charge_id FROM refunds) AND user_id IN (${cohort})`, since),
-    };
+    const people = (type, meta) => this.db.prepare(`SELECT COUNT(DISTINCT user_id) AS n FROM events WHERE type=? ${meta == null ? '' : 'AND meta=?'} AND at>=? AND user_id NOT IN (${ids})`).get(...[type, meta, since].filter(v => v != null)).n;
+    const steps = { app_open: people('app_open'), lesson1_open: people('lesson_open', '1'), lesson1_done: people('lesson_done', '1'), paywall_view: people('paywall_view'), checkout_start: people('checkout_start'), paid: people('paid') };
+    const lessons = Array.from({ length: 24 }, (_, i) => ({ id: i + 1, opened: 0, done: 0 }));
+    for (const r of this.db.prepare(`SELECT meta, type, COUNT(DISTINCT user_id) AS n FROM events WHERE type IN ('lesson_open','lesson_done') AND at>=? AND user_id NOT IN (${ids}) GROUP BY meta, type`).all(since)) {
+      const row = lessons[Number(r.meta) - 1]; if (row) row[r.type === 'lesson_open' ? 'opened' : 'done'] = r.n;
+    }
+    const paidSince = Math.floor(since / 1000); const active = 'y.charge_id NOT IN (SELECT charge_id FROM refunds)';
+    const methods = this.db.prepare(`SELECT y.provider AS provider, y.currency AS currency, COUNT(*) AS n, ROUND(COALESCE(SUM(y.amount),0),2) AS total FROM payments y WHERE y.provider != 'manual' AND ${active} AND y.paid_at >= ? AND y.user_id NOT IN (${ids}) GROUP BY y.provider, y.currency ORDER BY n DESC`).all(paidSince).map(r => ({ ...r }));
+    const applied = new Map(this.db.prepare(`SELECT meta, COUNT(DISTINCT user_id) AS n FROM events WHERE type='promo_applied' AND at>=? AND user_id NOT IN (${ids}) GROUP BY meta`).all(since).map(r => [r.meta, r.n]));
+    const paidWith = new Map(this.db.prepare(`SELECT o.promo AS code, COUNT(*) AS n FROM payments y JOIN orders o ON o.id=y.order_id WHERE o.promo IS NOT NULL AND y.provider != 'manual' AND ${active} AND y.paid_at >= ? AND y.user_id NOT IN (${ids}) GROUP BY o.promo`).all(paidSince).map(r => [r.code, r.n]));
+    const promos = [...new Set([...applied.keys(), ...paidWith.keys()])].sort().map(code => ({ code, applied: applied.get(code) || 0, paid: paidWith.get(code) || 0 }));
+    return { steps, lessons, methods, promos };
   }
   // ---- automatic offers (server/offers.mjs) ----
   offerSettings() { try { return JSON.parse(this.db.prepare("SELECT value FROM settings WHERE key='auto_offers'").get()?.value || '{}'); } catch { return {}; } }
