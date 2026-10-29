@@ -4,6 +4,7 @@ import { createHmac } from 'node:crypto';
 import { makeApi } from './api.mjs';
 import { configureBot, handleUpdate, validateAppUrl } from './bot-core.mjs';
 import { safeEqual } from './providers/index.mjs';
+import { channelsFor } from './telegram.mjs';
 import { MIME, SECURITY_HEADERS, body, errorStatus, json } from './http-common.mjs';
 
 export const WEBHOOK_PATH = '/telegram/webhook';
@@ -54,6 +55,20 @@ export function makeWorkerApp({ store, telegram, content, env = process.env, log
     });
     return bot;
   }
+  // The bot's own status in each required channel. getChatMember only works for other users when the bot is an administrator,
+  // so this is the first thing to look at when "Проверить подписку" fails. Public facts only; cached for 30 seconds.
+  let channelCheck = { at: 0, value: null };
+  async function checkChannels() {
+    if (channelCheck.value && Date.now() - channelCheck.at < 30000) return channelCheck.value;
+    const me = await telegramApi('getMe');
+    const value = [];
+    for (const channel of channelsFor(store)) {
+      try { value.push({ chat: channel.chatId, bot: (await telegramApi('getChatMember', { chat_id: channel.chatId, user_id: me.id })).status }); }
+      catch (error) { value.push({ chat: channel.chatId, bot: 'error', code: Number(error.code) || 'network', ...(error.description ? { description: error.description } : {}) }); }
+    }
+    channelCheck = { at: Date.now(), value };
+    return value;
+  }
   return async function handle(request) {
     const url = new URL(request.url);
     const reply = (status, value) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
@@ -68,7 +83,11 @@ export function makeWorkerApp({ store, telegram, content, env = process.env, log
       catch (error) { log(`Update handling failed (code ${Number(error.code) || 'internal'}). Update bodies are not logged.`); }
       return reply(200, { ok: true });
     }
-    if (url.pathname === '/health' && request.method === 'GET') { const state = await ensureBot(); return reply(200, { ok: true, app: 'vibentry', bot: state, ...(state === 'telegram-error' && botError ? { botError } : {}) }); }
+    if (url.pathname === '/health' && request.method === 'GET') {
+      const state = await ensureBot();
+      let channels; if (state === 'ok') { try { channels = await checkChannels(); } catch { channels = 'telegram-error'; } }
+      return reply(200, { ok: true, app: 'vibentry', bot: state, ...(state === 'telegram-error' && botError ? { botError } : {}), ...(channels ? { channels } : {}) });
+    }
     ensureBot();
     const response = nodeResponse();
     try {

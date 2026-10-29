@@ -78,7 +78,7 @@ test('Worker: webhook needs the derived secret; a paid update grants access once
 test('Worker: /health sets the webhook once and never replaces someone else\'s', async () => {
   const t = workerHarness();
   const health = await (await t.handle(new Request(APP + '/health'))).json();
-  assert.deepEqual(health, { ok: true, app: 'vibentry', bot: 'ok' });
+  assert.equal(health.ok, true); assert.equal(health.bot, 'ok'); assert.deepEqual(health.channels.map(c => c.chat), ['@examplechannel']);
   const set = t.calls.find(c => c.method === 'setWebhook');
   assert.equal(set.payload.url, APP + WEBHOOK_PATH); assert.equal(set.payload.secret_token, webhookSecret(TOKEN));
   assert.ok(t.calls.some(c => c.method === 'setChatMenuButton' && c.payload.menu_button.web_app.url === APP));
@@ -133,4 +133,18 @@ test('Worker /health explains bot setup failures without exposing the token', as
   assert.deepEqual(await run(TOKEN, unauthorized), { ok: true, app: 'vibentry', bot: 'telegram-error', botError: { step: 'getWebhookInfo', code: 401, description: 'Unauthorized' } });
   const menuFails = async method => { if (method === 'getWebhookInfo') return { url: '' }; if (method === 'setChatMenuButton') { const error = new Error('x'); error.code = 400; throw error; } return true; };
   assert.equal((await run(TOKEN, menuFails)).botError.step, 'configureBot');
+});
+test('Worker /health shows the bot\'s status in each required channel', async () => {
+  const store = new Store(':memory:');
+  store.saveChannels([{ chatId: '@goodchannel', url: 'https://t.me/goodchannel', title: 'A' }, { chatId: '@otherchannel', url: 'https://t.me/otherchannel', title: 'B' }]);
+  const api = async (method, payload) => {
+    if (method === 'getWebhookInfo') return { url: APP + WEBHOOK_PATH };
+    if (method === 'getMe') return { id: 99 };
+    if (method === 'getChatMember' && payload.chat_id === '@goodchannel') return { status: 'administrator' };
+    if (method === 'getChatMember') { const error = new Error('x'); error.code = 400; error.description = 'Bad Request: member list is inaccessible'; throw error; }
+    return true;
+  };
+  const handle = makeWorkerApp({ store, telegram: { isMember: async () => true, api }, content: {}, env: { BOT_TOKEN: TOKEN, APP_URL: APP }, log: () => {} });
+  const health = await (await handle(new Request(APP + '/health'))).json();
+  assert.deepEqual(health.channels, [{ chat: '@goodchannel', bot: 'administrator' }, { chat: '@otherchannel', bot: 'error', code: 400, description: 'Bad Request: member list is inaccessible' }]);
 });
