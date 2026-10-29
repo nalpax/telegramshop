@@ -103,6 +103,29 @@ with sync_playwright() as p:
         assert not page.errors, page.errors
         context.close()
 
+        # Paid user: bookmarks (server) and «Недавно открытое» (this device).
+        for width, height in [(360, 780), (1280, 900)]:
+            context, page = open_as(779, width, height)
+            page.goto(signed_url + '#materials?tab=favorites', wait_until='load')
+            page.get_by_text('Здесь будут ваши закладки').wait_for()
+            page.goto(signed_url + '#lesson?id=6', wait_until='load')
+            star = page.locator('.reader-meta [data-action="favorite"]')
+            star.wait_for(); assert star.get_attribute('aria-pressed') == 'false'
+            star.click(); page.wait_for_function("document.querySelector('.reader-meta [data-action=favorite]').getAttribute('aria-pressed') === 'true'")
+            page.wait_for_timeout(300)
+            page.reload(wait_until='load'); star.wait_for()
+            assert star.get_attribute('aria-pressed') == 'true', 'bookmark is kept on the server'
+            page.goto(signed_url + '#materials?tab=favorites', wait_until='load')
+            page.locator('.fav-row').first.wait_for()
+            check_layout(page, f'favorites-{width}')
+            page.locator('.fav-row [data-action="favorite"]').first.click()
+            page.get_by_text('Здесь будут ваши закладки').wait_for()
+            page.evaluate("location.hash = '#home'")
+            page.locator('.recent-item[data-action="lesson"][data-id="6"]').wait_for()
+            check_layout(page, f'home-recent-{width}')
+            assert not page.errors, page.errors
+            context.close()
+
         # Admin: system check and saving the price.
         for width, height in [(390, 844), (1280, 900)]:
             context, page = open_as(777, width, height)
@@ -125,4 +148,4 @@ with sync_playwright() as p:
     finally:
         server.terminate()
     browser.close()
-print(json.dumps({'viewports': [320, 390, 1280], 'result': 'PASS', 'flows': ['gate', 'home', 'real lesson', 'progress', 'paywall', 'search', 'resources', 'profile', 'onboarding', 'checkout', 'admin system', 'admin price']}, ensure_ascii=False))
+print(json.dumps({'viewports': [320, 390, 1280], 'result': 'PASS', 'flows': ['gate', 'home', 'real lesson', 'progress', 'paywall', 'search', 'resources', 'profile', 'onboarding', 'checkout', 'favorites', 'recently opened', 'admin system', 'admin price']}, ensure_ascii=False))

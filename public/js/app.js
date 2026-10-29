@@ -31,6 +31,51 @@ const RECENT_KEY = 'vibentry.recent.v1'; const SCROLL_KEY = 'vibentry.scroll.v1'
 const readLocal = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } };
 const writeLocal = (key, value) => { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} };
 function pushRecent(id) { writeLocal(RECENT_KEY, [id, ...readLocal(RECENT_KEY, []).filter(x => x !== id)].slice(0, 12)); }
+// Bookmarks (prompts, lessons, articles) live on the server (/api/favorites); in the demo they stay in memory.
+// «Недавно открытое» is a per-device list (localStorage, last 6), never sent anywhere.
+let favorites = [];
+const KIND = { prompt: ['Промпт', 'copy'], lesson: ['Урок', 'book'], article: ['База', 'file'] };
+const OPENED_KEY = 'vibentry.opened.v1';
+const sameItem = (f, kind, id) => f.kind === kind && String(f.id) === String(id);
+const isFav = (kind, id) => favorites.some(f => sameItem(f, kind, id));
+const favIds = kind => favorites.filter(f => f.kind === kind).map(f => String(f.id));
+async function loadFavorites() { if (config.preview || !session?.subscribed) return; try { favorites = (await getApi('/api/favorites')).items || []; } catch {} }
+const favLabel = (on, kind, title) => `${on ? 'Убрать из избранного' : 'В избранное'}: ${KIND[kind][0].toLowerCase()} «${title}»`;
+function starButton(kind, id, title, extra = '') {
+  const on = isFav(kind, id);
+  return `<button class="fav-quick ${extra} ${on ? 'is-on' : ''}" data-action="favorite" data-kind="${kind}" data-id="${e(String(id))}" data-title="${e(title)}" aria-pressed="${on}" aria-label="${e(favLabel(on, kind, title))}">${icon('star')}</button>`;
+}
+function paintStars(kind, id) {
+  const on = isFav(kind, id);
+  for (const b of document.querySelectorAll(`[data-action="favorite"][data-kind="${kind}"][data-id="${CSS.escape(String(id))}"]`)) { b.classList.toggle('is-on', on); b.setAttribute('aria-pressed', String(on)); b.setAttribute('aria-label', favLabel(on, kind, b.dataset.title || '')); }
+}
+async function toggleFavorite(kind, id, title) {
+  if (!KIND[kind]) return;
+  const on = !isFav(kind, id); const before = favorites;
+  favorites = on ? [{ kind, id: kind === 'lesson' ? Number(id) : id, title }, ...favorites] : favorites.filter(f => !sameItem(f, kind, id));
+  const relist = () => { paintStars(kind, id); if (catalogueTab === 'favorites' || (kind === 'prompt' && promptCategory === 'fav')) refreshResults(); };
+  relist();
+  try { tg?.HapticFeedback.selectionChanged(); } catch {}
+  if (config.preview) { if (on) toast('Добавлено в избранное.'); return; }
+  try {
+    const response = await fetch(`/api/favorites/${kind}/${encodeURIComponent(id)}`, { method: on ? 'PUT' : 'DELETE', headers: { 'X-Telegram-Init-Data': tg?.initData || '' } });
+    if (!response.ok) { let message = ''; try { const body = await response.json(); if (/[А-Яа-я]/.test(body.error || '')) message = body.error; } catch {} throw new Error(message); }
+    favorites = (await response.json()).items || favorites;
+    if (on) toast('Добавлено в избранное.');
+  } catch (error) {
+    favorites = before; relist();
+    toast(error.message || (on ? 'Не удалось добавить в избранное. Проверьте соединение и попробуйте ещё раз.' : 'Не удалось убрать из избранного. Проверьте соединение и попробуйте ещё раз.'));
+  }
+}
+function pushOpened(kind, id, title) {
+  if (!KIND[kind] || !title) return;
+  writeLocal(OPENED_KEY, [{ kind, id, title }, ...readLocal(OPENED_KEY, []).filter(x => x && !sameItem(x, kind, id))].slice(0, 6));
+}
+function recentStrip() {
+  const list = readLocal(OPENED_KEY, []); const items = (Array.isArray(list) ? list : []).filter(x => x && KIND[x.kind] && typeof x.title === 'string' && /^[A-Za-z0-9-]{1,64}$/.test(String(x.id))).slice(0, 6);
+  if (!items.length) return '';
+  return `<section class="recent-strip" aria-labelledby="recent-title"><div class="section-heading"><h2 id="recent-title">Недавно открытое</h2></div><div class="recent-row">${items.map(x => `<button class="recent-item" data-action="${x.kind}" data-id="${e(String(x.id))}"><span class="recent-kind">${icon(KIND[x.kind][1])}${KIND[x.kind][0]}${x.kind === 'lesson' ? ' ' + String(x.id).padStart(2, '0') : ''}</span><strong>${e(x.title)}</strong></button>`).join('')}</div></section>`;
+}
 async function loadMarks() { if (config.preview || !session?.subscribed) return; try { marks = await getApi('/api/marks'); } catch {} }
 async function saveMark(change) { if (config.preview) return true; try { marks = await sendApi('/api/marks', change); return true; } catch (error) { if (error.status === 403) openAccess(); else toast('Не удалось сохранить. Проверьте соединение.'); return false; } }
 const library = { prompts: null, articles: null, failed: {} };
@@ -83,7 +128,7 @@ function home() {
   return `<header class="home-header">${brand()}</header>
   ${hero()}
   <section class="continue-card" aria-labelledby="continue-title"><div class="continue-top"><span class="eyebrow">${eyebrow}</span>${icon(freeDone ? 'check' : 'sparkle')}</div><h2 id="continue-title">${title}</h2><div class="progress-caption"><span>Пройдено ${progress.done.length} из 24 уроков</span><span>${percent}%</span></div><progress max="24" value="${progress.done.length}" aria-label="Прогресс курса"></progress>${freeDone ? `<a class="button button-primary" href="#next">${label}${icon('arrow')}</a>` : `<button class="button button-primary" data-action="lesson" data-id="${next.id}">${label}${icon('arrow')}</button>`}</section>
-  ${homeStats()}${homePath()}<div class="home-duo">${dailyPrompt()}${homeCategories()}</div>
+  ${homeStats()}${homePath()}${recentStrip()}<div class="home-duo">${dailyPrompt()}${homeCategories()}</div>
   <section class="quick-section" aria-labelledby="quick-title"><div class="section-heading"><h2 id="quick-title">Быстрый доступ</h2></div><div class="quick-grid">${tile('Уроки', `24 урока,<br>${FREE_LESSONS} бесплатно`, 'book', urlFor())}${tile('Промпты', '300 запросов<br>для ИИ', 'prompts', urlFor('prompts'))}${tile('База', 'Инструменты, ниши,<br>клиенты, заказы', 'files', urlFor('base'))}${tile(session?.access?.active ? 'Мой доступ' : 'Полный доступ', session?.access?.active ? 'Всё открыто,<br>навсегда' : priceLabel() ? `${priceLabel()}<br>навсегда` : 'Один платёж,<br>навсегда', 'plane', '#access', 'access')}</div></section>
   <a class="practice-teaser" href="#practice"><span class="practice-glyph">${icon('play')}</span><span><strong>Практикум</strong><small>Конструктор промпта, квиз, калькулятор оценки и проверка перед сдачей${session?.practice && !session.practice.unlimited ? ` · бесплатно ${session.practice.remaining} из ${session.practice.limit} запусков` : ''}</small></span>${icon('arrow')}</a>
   <p class="home-note">Одна сделанная страница полезнее десяти прочитанных.</p>${nav('home')}`;
@@ -152,14 +197,14 @@ function promptsBody(query) {
   if (!items.length) return `<div class="empty-state">${icon('copy')}<h2>Промпты скоро появятся</h2><p>Библиотека из 300 запросов подключается вместе с остальными материалами курса.</p></div>`;
   const byId = new Map(items.map(item => [item.id, item]));
   const recent = readLocal(RECENT_KEY, []).filter(id => byId.has(id));
-  const special = [['fav', 'Избранное', marks.favorites.length], ['recent', 'Недавние', recent.length]].filter(([, , n]) => n > 0).map(([id, label, n]) => `<button class="chip chip-special ${promptCategory === id ? 'selected' : ''}" data-action="prompt-category" data-id="${id}">${id === 'fav' ? icon('star') : icon('clock')}${label} <span>${n}</span></button>`).join('');
+  const special = [['fav', 'Избранное', favIds('prompt').length], ['recent', 'Недавние', recent.length]].filter(([, , n]) => n > 0).map(([id, label, n]) => `<button class="chip chip-special ${promptCategory === id ? 'selected' : ''}" data-action="prompt-category" data-id="${id}">${id === 'fav' ? icon('star') : icon('clock')}${label} <span>${n}</span></button>`).join('');
   const chips = `<div class="chips" role="group" aria-label="Категории промптов"><button class="chip ${promptCategory === 'all' ? 'selected' : ''}" data-action="prompt-category" data-id="all">Все ${items.length}</button>${special}${categories.map((c, i) => `<button class="chip ${promptCategory === c.id ? 'selected' : ''}" data-action="prompt-category" data-id="${e(c.id)}">${e(c.title)} <span>${c.ids.length}</span></button>`).join('')}</div>`;
-  const ids = promptCategory === 'fav' ? marks.favorites : promptCategory === 'recent' ? recent : categories.find(c => c.id === promptCategory)?.ids;
+  const ids = promptCategory === 'fav' ? favIds('prompt') : promptCategory === 'recent' ? recent : categories.find(c => c.id === promptCategory)?.ids;
   const chosen = promptCategory === 'all' || !ids ? items : ids.map(id => byId.get(id)).filter(Boolean);
   const all = chosen.filter(item => matches(query, item.id, item.title, item.use));
   const rows = all.slice(0, promptLimit); const rest = all.length - rows.length;
   const locked = !session?.access?.active;
-  const star = item => { const on = marks.favorites.includes(item.id); return `<button class="fav-quick ${on ? 'is-on' : ''}" data-action="favorite" data-id="${e(item.id)}" aria-pressed="${on}" aria-label="${on ? 'Убрать из избранного' : 'В избранное'}: промпт ${e(item.id)}">${icon('star')}</button>`; };
+  const star = item => starButton('prompt', item.id, item.title);
   const more = rest > 0 ? `<button class="button button-secondary more-button" data-action="more-prompts">Показать ещё ${Math.min(30, rest)} · осталось ${rest}</button>` : '';
   const emptyFav = promptCategory === 'fav' && !all.length ? `<div class="empty-state">${icon('star')}<h2>Здесь будут избранные промпты</h2><p>Нажмите звёздочку рядом с промптом, чтобы он всегда был под рукой.</p></div>` : '';
   return `${chips}${emptyFav}<div class="prompt-list">${rows.map(item => `<div class="prompt-item">${star(item)}<button class="prompt-card ${locked ? 'is-locked' : ''}" data-action="prompt" data-id="${e(item.id)}"><span class="prompt-number">${e(item.id)}</span><span class="prompt-info"><strong>${e(item.title)}</strong><small>${e(item.use)}</small></span></button><button class="copy-quick ${locked ? 'is-locked' : ''}" data-action="quick-copy" data-id="${e(item.id)}" aria-label="${locked ? 'Откроется после покупки' : 'Скопировать промпт ' + e(item.id)}">${icon(locked ? 'lock' : 'copy')}</button></div>`).join('') || (emptyFav ? '' : emptySearch())}</div>${more}`;
@@ -176,13 +221,15 @@ function baseBody(query) {
   }).join('');
   const templates = materials.filter(m => matches(query, m.title, m.description));
   const templateBlock = templates.length ? `<section class="module-section">${heading('', 'Шаблоны из уроков', `${templates.length} ${plural(templates.length, 'шаблон', 'шаблона', 'шаблонов')}`)}<div class="lesson-list">${templates.map(m => `<button class="lesson-row base-row ${session?.access?.active ? '' : 'lesson-locked'}" data-action="resource" data-id="${e(m.id)}"><span class="base-icon">${icon('copy')}</span><span class="lesson-info"><strong>${e(m.title)}</strong><small>${e(m.description)}</small></span><span class="lesson-status">${icon(session?.access?.active ? 'chevron' : 'lock')}</span></button>`).join('')}</div></section>` : '';
-  return (sections + templateBlock) || emptySearch();
+  const termsLink = matches(query, 'Термины', 'словарь') ? `<section class="module-section">${heading('', 'Словарь', 'для всех')}<div class="lesson-list"><a class="lesson-row base-row" href="${urlFor('terms')}"><span class="base-icon">${icon('book')}</span><span class="lesson-info"><strong>Термины</strong><small>Простые объяснения слов из уроков</small></span><span class="lesson-status">${icon('chevron')}</span></a></div></section>` : '';
+  return (termsLink + sections + templateBlock) || emptySearch();
 }
 function catalogueBody(tab) {
   const query = search.trim().toLocaleLowerCase('ru');
   if (tab === 'prompts') return promptsBody(query);
   if (tab === 'base') return baseBody(query);
   if (tab === 'terms') return termsBody(query);
+  if (tab === 'favorites') return favoritesBody(query);
   return modules.map(m => {
     const rows = lessons.filter(l => l.module === m.id && matches(query, l.title, l.id));
     if (!rows.length) return '';
@@ -201,16 +248,27 @@ function openTerm(id) {
   const t = TERMS.find(x => x.id === id); if (!t) return;
   modal(e(t.title), `<p>${e(t.text)}</p><a class="button button-secondary" href="${urlFor('terms')}&term=${t.id}" data-action="all-terms">Все термины${icon('arrow')}</a>`);
 }
+function favoritesBody(query) {
+  if (!favorites.length) return `<div class="empty-state">${icon('star')}<h2>Здесь будут ваши закладки</h2><p>Нажмите звёздочку у промпта, в шапке урока или материала базы — он появится здесь. Закладки хранятся в вашем аккаунте Telegram, их видно на любом устройстве.</p><a class="button button-secondary" href="${urlFor('prompts')}">К промптам${icon('arrow')}</a></div>`;
+  const open = f => session?.access?.active || (f.kind === 'lesson' && lessons.find(l => l.id === f.id)?.free) || (f.kind === 'article' && library.articles?.items.find(a => a.id === f.id)?.free);
+  const sections = [['lesson', 'Уроки'], ['prompt', 'Промпты'], ['article', 'Материалы базы']].map(([kind, title]) => {
+    const rows = favorites.filter(f => f.kind === kind && matches(query, f.title, f.id));
+    if (!rows.length) return '';
+    return `<section class="module-section">${heading('', title, String(rows.length))}<div class="lesson-list">${rows.map(f => `<div class="fav-row"><button class="lesson-row base-row ${open(f) ? '' : 'lesson-locked'}" data-action="${kind}" data-id="${e(String(f.id))}"><span class="base-icon">${icon(KIND[kind][1])}</span><span class="lesson-info"><strong>${kind === 'article' ? '' : e(String(f.id).padStart(kind === 'lesson' ? 2 : 3, '0')) + ' · '}${e(f.title)}</strong><small>${open(f) ? KIND[kind][0] : 'Откроется после покупки'}</small></span><span class="lesson-status">${icon(open(f) ? 'chevron' : 'lock')}</span></button>${starButton(kind, f.id, f.title, 'fav-inline')}</div>`).join('')}</div></section>`;
+  }).join('');
+  return sections || emptySearch();
+}
 function emptySearch() { return `<div class="empty-state">${icon('search')}<h2>Пока ничего не нашлось</h2><p>Попробуйте другое слово или номер.</p></div>`; }
-const TABS = [['lessons', 'Уроки'], ['prompts', 'Промпты'], ['base', 'База'], ['terms', 'Термины']];
-const PLACEHOLDER = { lessons: 'Найти урок', prompts: 'Найти промпт', base: 'Найти материал', terms: 'Найти термин' };
+// «Термины» moved into «База» (v1.1): the tab still has its own address for links from lessons, but no segment.
+const TABS = [['lessons', 'Уроки'], ['prompts', 'Промпты'], ['base', 'База'], ['favorites', 'Избранное']];
+const PLACEHOLDER = { lessons: 'Найти урок', prompts: 'Найти промпт', base: 'Найти материал', terms: 'Найти термин', favorites: 'Найти в избранном' };
 function catalogue(params) {
-  const tab = TABS.some(([id]) => id === params.get('tab')) ? params.get('tab') : 'lessons';
+  const tab = [...TABS.map(([id]) => id), 'terms'].includes(params.get('tab')) ? params.get('tab') : 'lessons';
   catalogueTab = tab; highlightTerm = tab === 'terms' ? params.get('term') || '' : '';
   if (highlightTerm) setTimeout(() => document.querySelector(`#term-${CSS.escape(highlightTerm)}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }), 60);
   loadLibrary(tab);
   const banner = session?.access?.active ? '' : `<button class="access-banner" data-action="access"><span class="access-icon">${icon('lock')}</span><span><strong>Откройте весь Vibentry</strong><small>Уроки ${String(FREE_LESSONS + 1).padStart(2, '0')}–24, 300 промптов и вся база${priceLabel() ? ' · ' + priceLabel() + ' навсегда' : ''}</small></span>${icon('arrow')}</button>`;
-  return `<header class="page-header">${brand(true)}<div><h1>Материалы</h1><p>Всё, что нужно для вашего сайта</p></div></header><div class="catalogue-tools"><nav class="segments" aria-label="Тип материалов">${TABS.map(([id, label]) => `<a href="${urlFor(id)}" class="${tab === id ? 'selected' : ''}" ${tab === id ? 'aria-current="page"' : ''}>${label}</a>`).join('')}</nav><label class="search-box">${icon('search')}<input type="search" id="material-search" aria-label="${PLACEHOLDER[tab]}" placeholder="${PLACEHOLDER[tab]}" value="${e(search)}" autocomplete="off"></label></div><div id="catalogue-results">${catalogueBody(tab)}</div>${banner}${nav('materials')}`;
+  return `<header class="page-header">${brand(true)}<div><h1>Материалы</h1><p>Всё, что нужно для вашего сайта</p></div></header><div class="catalogue-tools"><nav class="segments" aria-label="Тип материалов">${TABS.map(([id, label]) => { const on = tab === id || (tab === 'terms' && id === 'base'); return `<a href="${urlFor(id)}" class="${on ? 'selected' : ''}" ${on ? 'aria-current="page"' : ''}>${label}</a>`; }).join('')}</nav><label class="search-box">${icon('search')}<input type="search" id="material-search" aria-label="${PLACEHOLDER[tab]}" placeholder="${PLACEHOLDER[tab]}" value="${e(search)}" autocomplete="off"></label></div><div id="catalogue-results">${catalogueBody(tab)}</div>${banner}${nav('materials')}`;
 }
 function errorPanel() { return `<section class="empty-state">${icon('file')}<h2>Материал не загрузился</h2><p>Проверьте соединение и попробуйте ещё раз.</p><button class="button button-primary" data-action="retry">Повторить ${icon('arrow')}</button></section>`; }
 function copyBlocks(markdown) { const { html, codes } = renderMarkdown(markdown); return { html, codes }; }
@@ -232,7 +290,7 @@ function lessonHtml(id, meta, content) {
   const footnote = !upcoming ? '<p class="reader-footnote">Вы прошли весь курс. Пора применять знания!</p>'
     : id === FREE_LESSONS && nextLocked ? `<a class="next-lesson" href="#next"><span><small>Бесплатная часть пройдена</small><strong>Что дальше в курсе</strong></span>${icon('arrow')}</a>`
     : `<button class="next-lesson ${nextLocked ? 'is-locked' : ''}" data-action="lesson" data-id="${upcoming.id}"><span><small>Следующий урок</small><strong>${String(upcoming.id).padStart(2, '0')} · ${e(upcoming.title)}</strong></span>${icon(nextLocked ? 'lock' : 'arrow')}</button>`;
-  return `<header class="reader-header"><a href="${urlFor()}" class="back-link">${icon('back')}Все уроки</a>${brand(true)}</header><article class="lesson-article"><div class="reader-meta"><span class="eyebrow">УРОК ${String(id).padStart(2, '0')} / 24</span><span class="free-label">${meta.free ? 'Бесплатно' : 'Полный доступ'}</span></div><h1>${e(meta.title)}</h1><div class="outcome">${icon('target')}<p><span>РЕЗУЛЬТАТ УРОКА</span>${e(content.outcome)}</p></div><div class="article-body">${bodyHtml}</div>${practice}<button class="button button-primary finish-button" data-action="finish" ${checked ? '' : 'disabled'}>${progress.done.includes(id) ? 'К следующему шагу' : 'Завершить урок'}${icon('arrow')}</button>${footnote}</article>`;
+  return `<header class="reader-header"><a href="${urlFor()}" class="back-link">${icon('back')}Все уроки</a>${brand(true)}</header><article class="lesson-article"><div class="reader-meta"><span class="eyebrow">УРОК ${String(id).padStart(2, '0')} / 24</span><span class="reader-tools"><span class="free-label">${meta.free ? 'Бесплатно' : 'Полный доступ'}</span>${starButton('lesson', id, meta.title, 'fav-inline')}</span></div><h1>${e(meta.title)}</h1><div class="outcome">${icon('target')}<p><span>РЕЗУЛЬТАТ УРОКА</span>${e(content.outcome)}</p></div><div class="article-body">${bodyHtml}</div>${practice}<button class="button button-primary finish-button" data-action="finish" ${checked ? '' : 'disabled'}>${progress.done.includes(id) ? 'К следующему шагу' : 'Завершить урок'}${icon('arrow')}</button>${footnote}</article>`;
 }
 async function reader(id, epoch) {
   const meta = lessons.find(l => l.id === id);
@@ -248,7 +306,7 @@ async function reader(id, epoch) {
     } catch { if (epoch === renderEpoch) app.innerHTML = `<a href="${urlFor()}" class="back-link">${icon('back')}Все уроки</a>${errorPanel()}`; return; }
   }
   if (epoch !== renderEpoch) return;
-  app.innerHTML = lessonHtml(id, meta, content);
+  app.innerHTML = lessonHtml(id, meta, content); pushOpened('lesson', id, meta.title);
   window.scrollTo({ top: 0, behavior: 'instant' });
   wireChecklist(id); linkTerms(app.querySelectorAll('.lesson-article .article-body, .lesson-article .practice-body')); restoreScroll(id);
 }
@@ -262,9 +320,9 @@ async function articleReader(id, epoch) {
     if (!response.ok) throw new Error('article unavailable');
     const content = await response.json();
     if (epoch !== renderEpoch) return;
-    const { html, codes } = copyBlocks(content.markdown); readerCodes = codes;
+    const { html, codes } = copyBlocks(content.markdown); readerCodes = codes; pushOpened('article', id, content.title);
     queueMicrotask(() => linkTerms(app.querySelectorAll('.lesson-article .article-body')));
-    app.innerHTML = `<header class="reader-header"><a href="${urlFor('base')}" class="back-link">${icon('back')}База</a>${brand(true)}</header><article class="lesson-article"><div class="reader-meta"><span class="eyebrow">${e(String(content.groupTitle || 'БАЗА').toUpperCase())}</span></div><h1>${e(content.title)}</h1><div class="article-body">${html}</div><a class="button button-secondary" href="${urlFor('base')}">К списку материалов${icon('arrow')}</a></article>`;
+    app.innerHTML = `<header class="reader-header"><a href="${urlFor('base')}" class="back-link">${icon('back')}База</a>${brand(true)}</header><article class="lesson-article"><div class="reader-meta"><span class="eyebrow">${e(String(content.groupTitle || 'БАЗА').toUpperCase())}</span>${starButton('article', content.id || id, content.title, 'fav-inline')}</div><h1>${e(content.title)}</h1><div class="article-body">${html}</div><a class="button button-secondary" href="${urlFor('base')}">К списку материалов${icon('arrow')}</a></article>`;
     window.scrollTo({ top: 0, behavior: 'instant' });
   } catch { if (epoch === renderEpoch) app.innerHTML = `<header class="reader-header"><a href="${urlFor('base')}" class="back-link">${icon('back')}База</a>${brand(true)}</header>${errorPanel()}`; }
 }
@@ -377,7 +435,7 @@ async function openPrompt(id) {
     const response = await fetch('/api/prompts/' + encodeURIComponent(id), { headers: { 'X-Telegram-Init-Data': tg?.initData || '' } });
     if (response.status === 403) return openAccess();
     if (!response.ok) throw new Error();
-    const item = await response.json();
+    const item = await response.json(); pushOpened('prompt', item.id, item.title);
     modal(e(item.title), `<p>${e(item.use || card?.use || '')}</p><div class="template-preview prompt-preview"><pre>${e(item.text)}</pre></div><button class="button button-primary" id="resource-copy">Копировать промпт${icon('copy')}</button><p class="modal-note">Промпт № ${e(item.id)}. Всё, что в квадратных скобках, замените своими данными.</p>`);
     overlay.querySelector('#resource-copy').onclick = () => { pushRecent(item.id); copy(item.text); };
   } catch { toast('Промпт недоступен. Проверьте доступ и соединение.'); }
@@ -412,7 +470,7 @@ document.addEventListener('click', event => {
   if (action === 'prompt') openPrompt(target.dataset.id);
   if (action === 'prompt-category') { promptCategory = target.dataset.id; promptLimit = 30; refreshResults(); }
   if (action === 'more-prompts') { promptLimit += 30; refreshResults(); }
-  if (action === 'favorite') toggleFavorite(target.dataset.id);
+  if (action === 'favorite') toggleFavorite(target.dataset.kind, target.dataset.id, target.dataset.title || '');
   if (action === 'task-item') toggleTask(target);
   if (action === 'term') openTerm(target.dataset.id);
   if (action === 'home-category') { promptCategory = target.dataset.id; go(urlFor('prompts')); }
@@ -432,13 +490,6 @@ document.addEventListener('click', event => {
 });
 document.addEventListener('change', event => { if (event.target.id === 'task-done') { checked = event.target.checked; app.querySelector('.finish-button').disabled = !checked; } });
 document.addEventListener('input', event => { if (event.target.id === 'material-search') { search = event.target.value; promptLimit = 30; refreshResults(); } });
-async function toggleFavorite(id) {
-  const on = !marks.favorites.includes(id);
-  marks.favorites = on ? [...marks.favorites, id].sort() : marks.favorites.filter(x => x !== id); refreshResults();
-  try { tg?.HapticFeedback.selectionChanged(); } catch {}
-  if (!(await saveMark({ favorite: { id, on } }))) { marks.favorites = on ? marks.favorites.filter(x => x !== id) : [...marks.favorites, id].sort(); refreshResults(); }
-  else if (on) toast('Добавлено в избранное.');
-}
 // Checklist items («Готово, когда») inside a lesson become real checkboxes, saved per account.
 function wireChecklist(id) {
   const done = new Set(marks.tasks[id] || []);
@@ -500,7 +551,7 @@ async function refreshSession() {
   const data = await sendApi('/api/session'); session = data; protection.refresh();
   if (data.practice?.unlimited) practiceBlocked.clear();
   if (!config.preview) { progress.done = data.done || []; progress.last = Math.min(24, (progress.done.at(-1) || 0) + 1); }
-  await loadMarks();
+  await Promise.all([loadMarks(), loadFavorites()]);
   return data;
 }
 async function initialize() {

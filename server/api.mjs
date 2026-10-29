@@ -4,6 +4,7 @@ import { makeProviders } from './providers/index.mjs';
 import { fingerprint } from './fingerprint.mjs';
 import { FREE_PRACTICE_LAUNCHES, HANDOVER, QUIZ, TRAINER_IDS } from './practice-data.mjs';
 import { MAX_OFFER_PERCENT, offerSettings } from './offers.mjs';
+import { FAVORITES_LIMIT, FAVORITE_KINDS } from './store-core.mjs';
 import { sendBackup } from './backup.mjs';
 import { weekPlanMessage } from './bot-core.mjs';
 // Course content is passed in by the host: server/content-node.mjs reads data/ for Node, the Cloudflare build bundles it.
@@ -30,7 +31,7 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
   }
   // Scraping guard: a real reader opens a handful of pages; a script pulls everything in seconds.
   const windows = new Map();
-  const limits = { content: 40, prompts: 200 };
+  const limits = { content: 40, prompts: 200, favorites: 120 };
   function overLimit(userId, bucket) {
     const key = `${bucket}:${userId}`; const now = Date.now(); const hits = (windows.get(key) || []).filter(time => now - time < 600000);
     hits.push(now); windows.set(key, hits);
@@ -55,6 +56,14 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
     return result || 'mismatch';
   }
   const hasText = l => !!(l.sections?.length || l.markdown);
+  // Titles only: bookmarks never carry lesson or article text (CLAUDE.md, rule 3).
+  function favoriteTitle(kind, itemId) {
+    if (kind === 'prompt') return promptIndex.get(itemId)?.title || null;
+    if (kind === 'article') return articleIndex.get(itemId)?.title || null;
+    if (kind === 'lesson' && /^\d{1,2}$/.test(itemId)) return lessons.find(l => l.id === Number(itemId))?.title || null;
+    return null;
+  }
+  const favoriteList = userId => ({ limit: FAVORITES_LIMIT, items: store.favorites(userId).flatMap(row => { const title = favoriteTitle(row.kind, row.item_id); return title ? [{ kind: row.kind, id: row.kind === 'lesson' ? Number(row.item_id) : row.item_id, title }] : []; }) });
   const promptIndex = new Map((prompts.items || []).map(item => [item.id, item]));
   const articleIndex = new Map(articles.map(item => [item.id, item]));
   // Positive membership checks are cached briefly so a busy app does not hit getChatMember on every request.
@@ -111,8 +120,11 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
     const articleMatch = url.pathname.match(/^\/api\/articles\/([a-z0-9-]+)$/);
     const listRoute = ['/api/prompts', '/api/articles', '/api/marks'].includes(url.pathname);
     const orderMatch = url.pathname.match(/^\/api\/order\/([0-9a-f-]{36})$/);
+    // Bookmarks: GET /api/favorites, PUT|DELETE /api/favorites/:kind/:id (initData in the header, like GET requests).
+    const favoriteMatch = url.pathname.match(/^\/api\/favorites\/([a-z]{1,16})\/([A-Za-z0-9-]{1,64})$/);
+    const favoriteRoute = (url.pathname === '/api/favorites' && request.method === 'GET') || (favoriteMatch && ['PUT', 'DELETE'].includes(request.method));
     const acceptedPost = (['/api/session', '/api/progress', '/api/invoice', '/api/promo', '/api/marks', '/api/practice', '/api/event', '/api/onboarding'].includes(url.pathname) || url.pathname.startsWith('/api/admin/')) && request.method === 'POST';
-    if (!acceptedPost && !((lessonMatch || resourceMatch || promptMatch || articleMatch || listRoute || adminRoute || orderMatch) && request.method === 'GET')) return send(404, { error: 'Unknown API endpoint' });
+    if (!acceptedPost && !favoriteRoute && !((lessonMatch || resourceMatch || promptMatch || articleMatch || listRoute || adminRoute || orderMatch) && request.method === 'GET')) return send(404, { error: 'Unknown API endpoint' });
     if (preview && url.pathname === '/api/session') return send(200, { preview: true, user: null, subscribed: false, access: { active: false }, done: [] });
     const data = acceptedPost ? await body(request) : {};
     const user = validateInitData(acceptedPost ? data.initData : request.headers['x-telegram-init-data'], process.env.BOT_TOKEN);
@@ -317,6 +329,18 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
       if (!['own', 'earn', 'learn', 'skip'].includes(goal) || !['none', 'tried', 'pro', 'skip'].includes(experience)) return send(400, { error: 'Unknown answer' });
       store.setOnboarding(user.id, goal, experience);
       return send(200, { onboarding: store.onboarding(user.id) });
+    }
+    if (favoriteRoute) {
+      if (overLimit(user.id, 'favorites')) return send(429, { error: 'Слишком много запросов подряд. Подождите несколько минут.' });
+      if (favoriteMatch) {
+        const [, kind, itemId] = favoriteMatch;
+        if (!FAVORITE_KINDS.includes(kind)) return send(400, { error: 'Unknown bookmark kind' });
+        // Any existing item can be bookmarked, paid ones too; opening it still checks access.
+        if (!favoriteTitle(kind, itemId)) return send(404, { error: 'Item not found' });
+        if (request.method === 'DELETE') store.removeFavorite(user.id, kind, itemId);
+        else if (store.addFavorite(user.id, kind, itemId) === 'limit') return send(409, { error: `Можно сохранить до ${FAVORITES_LIMIT} закладок. Уберите лишние в «Избранном».` });
+      }
+      return send(200, favoriteList(user.id));
     }
     if (url.pathname === '/api/marks') {
       if (request.method === 'GET') return send(200, store.marks(user.id));

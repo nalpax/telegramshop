@@ -4,6 +4,9 @@ import { randomUUID } from 'node:crypto';
 // node:sqlite on a server (server/store.mjs), Durable Object SQLite on Cloudflare (server/durable-sql.mjs).
 // Every table with data worth keeping, parents before children (orders before payments and invoices).
 export const BACKUP_TABLES = ['users', 'orders', 'payments', 'refunds', 'provider_invoices', 'progress', 'settings', 'promo_codes', 'audit', 'favorites', 'task_checks', 'funnel_events'];
+export const FAVORITE_KINDS = ['prompt', 'lesson', 'article'];
+export const FAVORITES_LIMIT = 200;
+const FAVORITES_COLUMNS = 'user_id INTEGER NOT NULL, kind TEXT NOT NULL, item_id TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY(user_id, kind, item_id)';
 export class StoreCore {
   constructor(db) {
     this.db = db;
@@ -22,7 +25,13 @@ export class StoreCore {
     addColumn('users', 'offers_off', 'INTEGER NOT NULL DEFAULT 0'); addColumn('users', 'offer_count', 'INTEGER NOT NULL DEFAULT 0'); addColumn('users', 'last_offer_at', 'INTEGER'); addColumn('users', 'after_free_at', 'INTEGER');
     addColumn('promo_codes', 'user_id', 'INTEGER'); addColumn('promo_codes', 'nudged', 'INTEGER NOT NULL DEFAULT 0'); addColumn('users', 'reminded_at', 'INTEGER');
     addColumn('payments', 'provider', "TEXT NOT NULL DEFAULT 'stars'"); addColumn('payments', 'amount', 'REAL'); addColumn('payments', 'currency', 'TEXT');
-    this.db.exec(`CREATE TABLE IF NOT EXISTS favorites (user_id INTEGER NOT NULL, prompt_id TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY(user_id, prompt_id));
+    // v1.1: bookmarks of any kind (prompt, lesson, article). Before that the table held prompt ids only; move them over once.
+    let legacyFavorites = false; try { this.db.prepare('SELECT prompt_id FROM favorites LIMIT 0').all(); legacyFavorites = true; } catch {}
+    if (legacyFavorites) this.db.exec(`ALTER TABLE favorites RENAME TO favorites_v0;
+      CREATE TABLE favorites (${FAVORITES_COLUMNS});
+      INSERT OR IGNORE INTO favorites SELECT user_id, 'prompt', prompt_id, created_at FROM favorites_v0;
+      DROP TABLE favorites_v0;`);
+    this.db.exec(`CREATE TABLE IF NOT EXISTS favorites (${FAVORITES_COLUMNS});
       CREATE TABLE IF NOT EXISTS funnel_events (user_id INTEGER NOT NULL, step TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY(user_id, step));
       CREATE TABLE IF NOT EXISTS task_checks (user_id INTEGER NOT NULL, lesson_id INTEGER NOT NULL, item INTEGER NOT NULL, PRIMARY KEY(user_id, lesson_id, item));`);
     this.db.exec("CREATE TABLE IF NOT EXISTS provider_invoices (provider TEXT NOT NULL, external_id TEXT NOT NULL, order_id TEXT NOT NULL REFERENCES orders(id), created_at INTEGER NOT NULL, PRIMARY KEY(provider, external_id))");
@@ -84,7 +93,8 @@ export class StoreCore {
   restore(backup) {
     if (backup?.format !== 'vibentry-backup' || typeof backup.tables !== 'object') throw new Error('This is not a Vibentry backup');
     for (const table of [...BACKUP_TABLES].reverse()) this.db.prepare(`DELETE FROM ${table}`).run();
-    for (const table of BACKUP_TABLES) for (const row of backup.tables[table] || []) {
+    for (const table of BACKUP_TABLES) for (let row of backup.tables[table] || []) {
+      if (table === 'favorites' && row.prompt_id) row = { user_id: row.user_id, kind: 'prompt', item_id: row.prompt_id, created_at: row.created_at }; // backup made before v1.1
       const columns = Object.keys(row).filter(c => /^[a-z_]+$/.test(c));
       this.db.prepare(`INSERT INTO ${table} (${columns.join(',')}) VALUES (${columns.map(() => '?').join(',')})`).run(...columns.map(c => row[c]));
     }
@@ -131,12 +141,21 @@ export class StoreCore {
   usePractice(userId) { this.db.prepare('UPDATE users SET practice_used = practice_used + 1 WHERE id=?').run(userId); }
   // ---- favourite prompts and ticked checklist items in lessons ----
   marks(userId) {
-    const favorites = this.db.prepare('SELECT prompt_id FROM favorites WHERE user_id=? ORDER BY prompt_id').all(userId).map(r => r.prompt_id);
+    const favorites = this.db.prepare("SELECT item_id FROM favorites WHERE user_id=? AND kind='prompt' ORDER BY item_id").all(userId).map(r => r.item_id);
     const tasks = {};
     for (const r of this.db.prepare('SELECT lesson_id, item FROM task_checks WHERE user_id=? ORDER BY lesson_id, item').all(userId)) (tasks[r.lesson_id] ||= []).push(r.item);
     return { favorites, tasks };
   }
-  setFavorite(userId, promptId, on) { if (on) this.db.prepare('INSERT OR IGNORE INTO favorites VALUES (?,?,?)').run(userId, promptId, Date.now()); else this.db.prepare('DELETE FROM favorites WHERE user_id=? AND prompt_id=?').run(userId, promptId); }
+  favorites(userId) { return this.db.prepare('SELECT kind, item_id, created_at FROM favorites WHERE user_id=? ORDER BY created_at DESC, item_id').all(userId); }
+  // 'added' | 'exists' | 'limit'
+  addFavorite(userId, kind, itemId, now = Date.now()) {
+    if (this.db.prepare('SELECT 1 FROM favorites WHERE user_id=? AND kind=? AND item_id=?').get(userId, kind, itemId)) return 'exists';
+    if (this.db.prepare('SELECT COUNT(*) AS n FROM favorites WHERE user_id=?').get(userId).n >= FAVORITES_LIMIT) return 'limit';
+    this.db.prepare('INSERT OR IGNORE INTO favorites VALUES (?,?,?,?)').run(userId, kind, itemId, now);
+    return 'added';
+  }
+  removeFavorite(userId, kind, itemId) { this.db.prepare('DELETE FROM favorites WHERE user_id=? AND kind=? AND item_id=?').run(userId, kind, itemId); }
+  setFavorite(userId, promptId, on) { if (on) this.addFavorite(userId, 'prompt', promptId); else this.removeFavorite(userId, 'prompt', promptId); }
   setTask(userId, lessonId, item, on) { if (on) this.db.prepare('INSERT OR IGNORE INTO task_checks VALUES (?,?,?)').run(userId, lessonId, item); else this.db.prepare('DELETE FROM task_checks WHERE user_id=? AND lesson_id=? AND item=?').run(userId, lessonId, item); }
   refund(chargeId) { if (typeof chargeId === 'string') this.db.prepare('INSERT OR IGNORE INTO refunds VALUES (?,?)').run(chargeId, Date.now()); }
   settings() { try { return JSON.parse(this.db.prepare("SELECT value FROM settings WHERE key='offer'").get()?.value || '{}'); } catch { return {}; } }
