@@ -400,3 +400,49 @@ progress::-moz-progress-bar{background:var(--accent);border-radius:4px}
 .funnel-pair{display:flex;justify-content:space-between;gap:12px;align-items:center;min-height:44px;padding:8px 0;border-bottom:1px solid var(--line);font-size:14px}
 .funnel-pair strong{font-weight:600;text-align:right;font-variant-numeric:tabular-nums}
 .admin-card h2+.funnel-pairs{margin-top:8px}.funnel-pairs+h2{margin-top:18px}
+
+/* ---- v1.1.1: широкий экран без пустот + отступ под кнопки Telegram в полноэкранном режиме ---- */
+/* Telegram sets these from telegram-web-app.js (0 outside fullscreen). */
+:root{--tg-top:calc(var(--tg-safe-area-inset-top,0px) + var(--tg-content-safe-area-inset-top,0px))}
+@media(max-width:1023px){.app-shell{margin-top:var(--tg-top)}}
+/* Практикум: советы */
+.practice-tips{display:grid;gap:0;margin-top:22px;border-top:1px solid var(--line)}
+.practice-tip{display:grid;grid-template-columns:24px minmax(0,1fr);column-gap:12px;row-gap:2px;padding:14px 0;border-bottom:1px solid var(--line)}
+.practice-tip .icon{grid-row:1 / span 2;width:20px;height:20px;color:var(--ink-3);margin-top:2px}
+.practice-tip strong{font-size:15px;font-weight:600;color:var(--ink)}
+.practice-tip p{margin:0;font-size:13px;line-height:1.5;color:var(--ink-3)}
+/* Профиль: следующий урок и маршрут */
+.profile-side{display:grid;gap:16px}
+.profile-next{display:grid;gap:8px;padding:20px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg)}
+.profile-next .eyebrow{font-size:11px;color:var(--ink-3)}
+.profile-next strong{font-size:17px;line-height:1.35;color:var(--ink)}
+.profile-next .button{margin-top:6px}
+.profile-route{margin:16px 0;padding:6px 20px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg)}
+.profile-route h2{font-size:15px;font-weight:600;margin:12px 0 4px}
+.route-row{display:grid;grid-template-columns:32px minmax(0,1fr) 44px;align-items:center;gap:12px;min-height:56px;border-top:1px solid var(--line)}
+.route-row:first-of-type{border-top:0}
+.route-row .path-num{font-size:12px;font-weight:700;color:var(--hue)}
+.route-body{display:grid;gap:6px;min-width:0}
+.route-body strong{font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.route-body progress{-webkit-appearance:none;appearance:none;width:100%;height:4px;border:0;border-radius:2px;background:var(--surface-2);overflow:hidden}
+.route-body progress::-webkit-progress-bar{background:var(--surface-2)}
+.route-body progress::-webkit-progress-value{background:var(--hue);border-radius:2px}
+.route-body progress::-moz-progress-bar{background:var(--hue);border-radius:2px}
+.route-row small{font-size:12px;color:var(--ink-3);text-align:right;font-variant-numeric:tabular-nums}
+@media(min-width:1024px){
+  .bottom-nav{padding-top:calc(26px + var(--tg-top))}
+  .app-shell{padding-top:calc(48px + var(--tg-top))}
+  /* Материалы: вкладки и поиск в одну строку на всю ширину */
+  .catalogue-tools{display:flex;align-items:center;gap:12px}
+  .catalogue-tools .segments{flex:0 0 520px;max-width:none;margin-bottom:0}
+  .catalogue-tools .search-box{flex:1;max-width:none}
+  /* Практикум: карточки 2×2 и советы в три колонки */
+  .practice-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;border-top:0}
+  .practice-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);padding:24px;min-height:150px;align-items:flex-start}
+  .practice-card:hover{background:var(--surface-2);border-color:var(--line-2)}
+  .practice-card .practice-info strong{font-size:18px}
+  .practice-card .practice-info small{font-size:14px}
+  .practice-tips{grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;border-top:0;margin-top:28px}
+  .practice-tip{border:1px solid var(--line);border-radius:var(--r-lg);padding:20px}
+  .profile-route{margin-top:0}
+}

@@ -253,7 +253,7 @@ progress{height:7px}
   .app-shell[data-page=profile]{display:grid;grid-template-columns:380px minmax(0,1fr);column-gap:34px;align-content:start}
   .app-shell[data-page=profile]>*{grid-column:2}
   .app-shell[data-page=profile]>.page-header{grid-column:1/-1}
-  .app-shell[data-page=profile]>.profile-card{grid-column:1;grid-row:2 / span 6;align-self:start;padding:34px 26px 22px}
+  .app-shell[data-page=profile]>.profile-side{grid-column:1;grid-row:2 / span 8;align-self:start}.app-shell[data-page=profile] .profile-card{padding:34px 26px 22px}
   .profile-links button{min-height:62px;font-size:16px}
   /* admin */
   .admin-panel{max-width:1040px;margin:0 auto}.admin-panel h1{font-size:38px}

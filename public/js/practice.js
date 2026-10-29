@@ -18,13 +18,19 @@ export const trainers = [
   { id: 'handover', title: 'Проверка перед сдачей', description: 'Пройдите сайт по списку, прежде чем отправить ссылку клиенту', minutes: '15 мин', glyph: 'check' },
 ];
 
+const TIPS = [
+  ['target', 'На своём проекте', 'Конструктор и калькулятор работают с вашими ответами: в итоге получается текст под вашу задачу, а не общий пример.'],
+  ['copy', 'Сразу в работу', 'Готовый промпт и текст для предложения клиенту копируются одной кнопкой.'],
+  ['check', 'Отметка о прохождении', 'Пройденные тренажёры отмечаются галочкой на этом устройстве, чтобы было видно, что осталось.'],
+];
 // limits: { unlimited, limit, remaining } from the server (session.practice).
 export function practiceList(limits) {
   const state = load(); const free = limits && !limits.unlimited; const out = free && limits.remaining <= 0;
   const banner = !free ? '' : `<button class="practice-limit ${out ? 'is-out' : ''}" data-action="access">${icon(out ? 'lock' : 'sparkle')}<span><strong>${out ? 'Бесплатные запуски закончились' : `Бесплатно: осталось ${limits.remaining} из ${limits.limit} запусков`}</strong><small>С полным доступом «Практикум» без ограничений</small></span>${icon('arrow')}</button>`;
   return `<header class="page-header"><div><h1>Практикум</h1><p>Тренажёры, чтобы закрепить навык на деле</p></div></header>
   <p class="practice-intro">Это не уроки курса, а инструменты: соберите промпт, проверьте себя, посчитайте проект.</p>${banner}
-  <div class="practice-grid">${trainers.map(t => `<a class="practice-card ${out ? 'is-locked' : ''}" href="#practice?id=${t.id}"><span class="practice-glyph">${icon(t.glyph)}</span><span class="practice-info"><strong>${t.title}</strong><small>${t.description}</small><span class="practice-meta">${t.minutes}${state[t.id]?.done ? ` · ${icon('check')}пройдено` : ''}</span></span>${icon(out ? 'lock' : 'chevron')}</a>`).join('')}</div>`;
+  <div class="practice-grid">${trainers.map(t => `<a class="practice-card ${out ? 'is-locked' : ''}" href="#practice?id=${t.id}"><span class="practice-glyph">${icon(t.glyph)}</span><span class="practice-info"><strong>${t.title}</strong><small>${t.description}</small><span class="practice-meta">${t.minutes}${state[t.id]?.done ? ` · ${icon('check')}пройдено` : ''}</span></span>${icon(out ? 'lock' : 'chevron')}</a>`).join('')}</div>
+  <section class="practice-tips" aria-label="Как устроен Практикум">${TIPS.map(([glyph, title, text]) => `<div class="practice-tip">${icon(glyph)}<strong>${title}</strong><p>${text}</p></div>`).join('')}</section>`;
 }
 // Shown instead of a trainer when a free account has used its launches.
 export function practicePaywall(id, price) {
