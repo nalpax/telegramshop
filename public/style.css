@@ -954,3 +954,10 @@ h1,h2,h3 { letter-spacing:-.035em; }
   .project-summary .site-study { display:none; }
   .project-summary .project-milestones,.project-summary .project-caption,.project-summary .underlined-link { grid-column:1; }
 }
+@media(min-width:1200px) {
+  .project-summary .project-milestones { display:grid; gap:9px; align-self:center; margin:0; }
+  .project-summary .project-milestones:before { display:none; }
+  .project-summary .project-milestones>span { display:flex; align-items:center; width:auto; min-height:23px; height:auto; border:0; border-radius:0; background:none; color:#bfe8aa; font:11px/1.45 ui-monospace,monospace; justify-content:flex-start; }
+  .project-summary .project-milestones>span:after { content:attr(data-label); color:#c6dec5; font:11px/1.45 Arial,sans-serif; margin-left:10px; }
+  .project-summary .project-milestones>span.completed:after { color:#d9faab; }
+}

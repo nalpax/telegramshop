@@ -18,7 +18,7 @@ export function siteDrawing() {
 }
 export function projectSummary(userId) {
   const p = readProject(userId);
-  return `<section class="project-summary"><div class="panel-heading"><span class="eyebrow">В ПРАКТИКЕ</span><span class="panel-number">${p.done.length} / 4</span></div><div class="project-heading"><h2>${e(p.title || 'Ваш первый сайт')}</h2><a class="quiet-icon" href="#project" aria-label="Открыть учебный проект">${icon('arrow')}</a></div>${siteDrawing()}<div class="project-milestones">${STAGES.map(([title], i) => `<span class="${p.done.includes(i) ? 'completed' : ''}" title="${e(title)}">${p.done.includes(i) ? icon('check') : String(i + 1).padStart(2, '0')}</span>`).join('')}</div><p class="project-caption">Отметьте этапы, которые уже сделали.</p><a class="underlined-link" href="#project">Открыть проект ${icon('arrow')}</a></section>`;
+  return `<section class="project-summary"><div class="panel-heading"><span class="eyebrow">В ПРАКТИКЕ</span><span class="panel-number">${p.done.length} / 4</span></div><div class="project-heading"><h2>${e(p.title || 'Ваш первый сайт')}</h2><a class="quiet-icon" href="#project" aria-label="Открыть учебный проект">${icon('arrow')}</a></div>${siteDrawing()}<div class="project-milestones">${STAGES.map(([title], i) => `<span class="${p.done.includes(i) ? 'completed' : ''}" title="${e(title)}" data-label="${e(title)}">${p.done.includes(i) ? icon('check') : String(i + 1).padStart(2, '0')}</span>`).join('')}</div><p class="project-caption">Отметьте этапы, которые уже сделали.</p><a class="underlined-link" href="#project">Открыть проект ${icon('arrow')}</a></section>`;
 }
 export function projectScreen(userId) {
   const p = readProject(userId);
