@@ -412,3 +412,5 @@ body.reading .lesson-article img{-webkit-user-drag:none;pointer-events:none}
 .term-card.is-highlighted{border-color:var(--accent);animation:glow 1.6s ease-out}
 .segments a{min-width:0;padding-left:4px;padding-right:4px;white-space:nowrap}
 @media (min-width:1024px){.term-list{grid-template-columns:1fr 1fr}}
+.onboarding{padding:12px 0 24px}.onboarding h1{font-size:28px;line-height:1.2;margin:8px 0 10px}.onboarding h1 span{color:var(--accent)}.onboarding .p-answers{margin:14px 0 16px}.onb-skip{display:block;margin:0 auto;min-height:44px;color:var(--soft)}
+.onb-tip{display:flex;gap:12px;align-items:flex-start;padding:14px 16px;margin:12px 0 16px;border:1px solid var(--accent);border-radius:16px;background:var(--surface)}.onb-tip .icon{flex:none;color:var(--accent)}.onb-tip p{margin:0;font-size:15px;line-height:1.55}.onboarding .button{margin-bottom:10px}

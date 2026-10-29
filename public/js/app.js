@@ -4,6 +4,7 @@ import { renderMarkdown } from './markdown.js';
 import { createAdmin, planBadge } from './admin.js';
 import { installProtection } from './protect.js';
 import { GROUPS, TERMS, linkTerms } from './glossary.js';
+import { onboardingScreen } from './onboarding.js';
 import { mountPractice, practiceList, practicePaywall, practiceScreen, setPracticeData } from './practice.js';
 import { progress, saveProgress, complete, resetProgress, escape as e } from './state.js';
 
@@ -20,6 +21,8 @@ let readerCodes = [];
 let catalogueTab = 'lessons';
 let promptCategory = 'all';
 let promptLimit = 30;
+// First-visit questions (onboarding.js): current step, answers, and whether the tip is still on screen.
+let obStep = 0; let obAnswers = {}; let obTip = false;
 // «Практикум» trainers allowed or refused by the server in this app session (see practiceView).
 const practiceStarted = new Set(); const practiceBlocked = new Set();
 // Favourite prompts and ticked checklist items live on the server (/api/marks); recently copied prompts are a per-device convenience.
@@ -251,6 +254,8 @@ function render() {
   const adminBypass = session?.isAdmin && route().name === 'admin';
   if ((config.preview && !previewEntered) || (!config.preview && !session?.subscribed && !adminBypass)) { app.innerHTML = gateScreen(); return; }
   const { name, params } = route();
+  // Once, after subscribing. Deep links (a lesson from a reminder, the tariff, the admin panel) are never blocked.
+  if (!config.preview && session && (session.onboarding === null || obTip) && !['admin', 'buy', 'lesson', 'article', 'practice'].includes(name)) { app.innerHTML = onboardingScreen(obStep, obAnswers, id => e(lessons[id - 1].title)); window.scrollTo({ top: 0, behavior: 'instant' }); return; }
   readerId = 0;
   const reading = name === 'lesson' || name === 'article';
   app.dataset.page = name;
@@ -381,6 +386,10 @@ document.addEventListener('click', event => {
   if (action === 'favorite') toggleFavorite(target.dataset.id);
   if (action === 'task-item') toggleTask(target);
   if (action === 'term') openTerm(target.dataset.id);
+  if (action === 'onb-answer') { obAnswers[target.dataset.q] = target.dataset.id; obStep++; if (obStep >= 2) { obTip = true; session.onboarding = { ...obAnswers }; sendApi('/api/onboarding', obAnswers).catch(() => {}); } render(); }
+  if (action === 'onb-skip') { obTip = false; session.onboarding = { goal: 'skip', experience: 'skip' }; sendApi('/api/onboarding', { skip: true }).catch(() => {}); go('#home'); }
+  if (action === 'onb-start') { obTip = false; go('#lesson?id=' + Number(target.dataset.id)); }
+  if (action === 'onb-home') { obTip = false; go('#home'); }
   if (action === 'all-terms') { closeModal(false); go(target.getAttribute('href')); }
   if (action === 'article') { const info = library.articles?.items.find(a => a.id === target.dataset.id); if (info && !info.free && !session?.access?.active) return openAccess(); go('#article?id=' + target.dataset.id); }
   if (action === 'reload-library') loadLibrary(catalogueTab, true);

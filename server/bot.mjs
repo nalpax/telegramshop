@@ -41,7 +41,7 @@ async function run() {
       try {
         const updates = await api('getUpdates', { offset, timeout: 25, allowed_updates: ['message', 'pre_checkout_query', 'callback_query'] }, 35000);
         for (const update of updates) {
-          await handleUpdate(update, { api, store, appUrl, purchase });
+          await handleUpdate(update, { api, store, appUrl, purchase, titles });
           offset = update.update_id + 1;
         }
       } catch (error) {

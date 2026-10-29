@@ -14,7 +14,7 @@ test('Bot handler: pre-checkout, successful payment, duplicate delivery, refund 
   await handleUpdate(paid, { ...t, appUrl }); await handleUpdate(paid, { ...t, appUrl });
   assert.equal(t.store.db.prepare('SELECT count(*) AS n FROM payments').get().n, 1);
   assert.equal(t.store.entitlement(5).active, true);
-  assert.match(t.calls.at(-1).payload.text, /Оплата получена/);
+  assert.match(t.calls.at(-2).payload.text, /Оплата получена/); assert.match(t.calls.at(-1).payload.text, /План на первую неделю/);
   await handleUpdate({ message: { chat: { id: 5 }, refunded_payment: { telegram_payment_charge_id: 'ch-1' } } }, { ...t, appUrl });
   assert.equal(t.store.entitlement(5).active, false);
   const other = t.store.createOrder(6, 50, 'one_time');

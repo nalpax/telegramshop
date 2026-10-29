@@ -18,7 +18,7 @@ export class StoreCore {
     // No PRAGMA here: Durable Objects do not allow every PRAGMA. An existing column is reported as "duplicate column".
     const addColumn = (table, column, ddl) => { try { this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`); } catch (error) { if (!/duplicate column/i.test(String(error?.message))) throw error; } };
     addColumn('orders', 'promo', 'TEXT'); addColumn('orders', 'provider', "TEXT NOT NULL DEFAULT 'stars'"); addColumn('orders', 'currency', 'TEXT'); addColumn('orders', 'amount', 'REAL');
-    addColumn('users', 'reminders_off', 'INTEGER NOT NULL DEFAULT 0'); addColumn('users', 'practice_used', 'INTEGER NOT NULL DEFAULT 0');
+    addColumn('users', 'reminders_off', 'INTEGER NOT NULL DEFAULT 0'); addColumn('users', 'practice_used', 'INTEGER NOT NULL DEFAULT 0'); addColumn('users', 'goal', 'TEXT'); addColumn('users', 'experience', 'TEXT');
     addColumn('users', 'offers_off', 'INTEGER NOT NULL DEFAULT 0'); addColumn('users', 'offer_count', 'INTEGER NOT NULL DEFAULT 0'); addColumn('users', 'last_offer_at', 'INTEGER'); addColumn('users', 'after_free_at', 'INTEGER');
     addColumn('promo_codes', 'user_id', 'INTEGER'); addColumn('promo_codes', 'nudged', 'INTEGER NOT NULL DEFAULT 0'); addColumn('users', 'reminded_at', 'INTEGER');
     addColumn('payments', 'provider', "TEXT NOT NULL DEFAULT 'stars'"); addColumn('payments', 'amount', 'REAL'); addColumn('payments', 'currency', 'TEXT');
@@ -74,6 +74,9 @@ export class StoreCore {
   markReminded(userId, now = Date.now()) { this.db.prepare('UPDATE users SET reminded_at=? WHERE id=?').run(now, userId); }
   setReminders(userId, on) { this.db.prepare('UPDATE users SET reminders_off=? WHERE id=?').run(on ? 0 : 1, userId); }
   remindersOn(userId) { return !this.db.prepare('SELECT reminders_off FROM users WHERE id=?').get(userId)?.reminders_off; }
+  // ---- first-visit questions (public/js/onboarding.js) ----
+  onboarding(userId) { const r = this.db.prepare('SELECT goal, experience FROM users WHERE id=?').get(userId); return r?.goal ? { goal: r.goal, experience: r.experience } : null; }
+  setOnboarding(userId, goal, experience) { this.db.prepare('UPDATE users SET goal=?, experience=? WHERE id=?').run(goal, experience, userId); }
   // ---- backup (server/backup.mjs, scripts/restore-backup.mjs) ----
   dump(now = Date.now()) { return { format: 'vibentry-backup', version: 1, createdAt: new Date(now).toISOString(), tables: Object.fromEntries(BACKUP_TABLES.map(t => [t, this.db.prepare(`SELECT * FROM ${t}`).all()])) }; }
   isEmpty() { return !this.db.prepare('SELECT 1 FROM users LIMIT 1').get() && !this.db.prepare('SELECT 1 FROM payments LIMIT 1').get(); }

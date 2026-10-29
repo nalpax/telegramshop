@@ -28,6 +28,17 @@ export function tariffMessage(info, appUrl) {
 export function docsMessage(appUrl) {
   return { text: 'Документы Vibentry: тарифы и цены, пользовательское соглашение (в том числе условия возврата), политика конфиденциальности и контакты поддержки.', reply_markup: { inline_keyboard: [[{ text: 'Тарифы и цены', url: `${appUrl}/tariffs.html` }], [{ text: 'Пользовательское соглашение', url: `${appUrl}/terms.html` }], [{ text: 'Политика конфиденциальности', url: `${appUrl}/privacy.html` }], [{ text: 'Контакты', url: `${appUrl}/contacts.html` }]] } };
 }
+// «Письмо от автора» after a confirmed purchase: thanks and a 7-day plan built from the next unfinished lessons.
+export function weekPlanMessage({ done = [], titles = [], appUrl, support = 'nalpax' }) {
+  const author = /^[a-zA-Z0-9_]{5,32}$/.test(support || '') ? support : 'nalpax';
+  const next = Array.from({ length: 24 }, (_, i) => i + 1).filter(id => !done.includes(id)).slice(0, 5);
+  const days = next.map((id, i) => `День ${i + 1} — урок ${String(id).padStart(2, '0')}${titles[id - 1] ? ` «${titles[id - 1]}»` : ''}`);
+  days.push(`День ${days.length + 1} — «Практикум»: соберите в конструкторе промпт для своей страницы и проверьте себя в квизе`);
+  days.push(`День ${days.length + 1} — оглянитесь на неделю: опубликуйте то, что получилось, и пройдите его по чек-листу «Проверка перед сдачей»`);
+  const text = ['План на первую неделю ✍️', 'Спасибо, что вы с Vibentry! Доступ открыт навсегда — проходите в своём темпе. Если хочется ритма, вот план на 7 дней, по одному шагу в день:', days.join('\n'), 'Незнакомое слово в тексте — нажмите на него, откроется объяснение. Если застрянете, напишите мне: @' + author + '.', '— Автор курса'].join('\n\n');
+  const first = next[0];
+  return { text, reply_markup: { inline_keyboard: [[first ? { text: `Начать: урок ${String(first).padStart(2, '0')} →`, web_app: { url: `${appUrl}/#lesson?id=${first}` } } : { text: 'Открыть курс', web_app: { url: appUrl } }]] } };
+}
 export const PAYMENT_STUB = 'Оплата пока недоступна: платёжная система подключается. Деньги не списаны. Как только оплата заработает, кнопка поведёт на страницу оплаты. Вопросы — /paysupport';
 export const BOT_COMMANDS = [{ command: 'start', description: 'Открыть курс' }, { command: 'tariff', description: 'Тариф и оплата' }, { command: 'docs', description: 'Документы и условия' }, { command: 'help', description: 'Как всё устроено' }, { command: 'support', description: 'Написать автору' }, { command: 'paysupport', description: 'Вопросы об оплате' }, { command: 'id', description: 'Мой Telegram ID' }, { command: 'reminders', description: 'Напоминания об уроках' }, { command: 'offers', description: 'Персональные скидки' }];
 // Commands and the menu button that opens the Mini App.
@@ -36,7 +47,7 @@ export async function configureBot(api, appUrl) {
   await api('setChatMenuButton', { menu_button: { type: 'web_app', text: 'Vibentry', web_app: { url: appUrl } } });
 }
 // One Telegram update. Access is granted only by successful_payment checked against the stored order.
-export async function handleUpdate(update, { api, store, appUrl, support = process.env.SUPPORT_USERNAME, log = console.error, purchase = () => null }) {
+export async function handleUpdate(update, { api, store, appUrl, support = process.env.SUPPORT_USERNAME, log = console.error, purchase = () => null, titles = [] }) {
   if (update.callback_query) {
     const { id, from, data } = update.callback_query;
     if (from?.id && (data === 'offers:off' || data === 'offers:on')) {
@@ -68,7 +79,10 @@ export async function handleUpdate(update, { api, store, appUrl, support = proce
       // The buyer must never be left without an answer after paying.
       await api('sendMessage', { chat_id: update.message.chat.id, text: 'Платёж получен, но доступ не открылся автоматически. Не оплачивайте ещё раз: напишите автору через /paysupport, мы разберёмся.' }).catch(() => {});
     }
-    else await api('sendMessage', { chat_id: update.message.chat.id, text: 'Оплата получена, спасибо! Все уроки, промпты и база материалов открыты в мини-приложении.', reply_markup: { inline_keyboard: [[{ text: 'Продолжить обучение →', web_app: { url: appUrl } }]] } });
+    else {
+      await api('sendMessage', { chat_id: update.message.chat.id, text: 'Оплата получена, спасибо! Все уроки, промпты и база материалов открыты в мини-приложении.', reply_markup: { inline_keyboard: [[{ text: 'Продолжить обучение →', web_app: { url: appUrl } }]] } });
+      await api('sendMessage', { chat_id: update.message.chat.id, ...weekPlanMessage({ done: store.getProgress(update.message.from.id), titles, appUrl, support }) }).catch(() => {});
+    }
   } else if (update.message?.chat?.type === 'private' && update.message.text) {
     const [first, payload] = update.message.text.split(/\s+/);
     const command = first.split('@')[0];

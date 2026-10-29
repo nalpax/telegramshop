@@ -5,6 +5,7 @@ import { fingerprint } from './fingerprint.mjs';
 import { FREE_PRACTICE_LAUNCHES, HANDOVER, QUIZ, TRAINER_IDS } from './practice-data.mjs';
 import { MAX_OFFER_PERCENT, offerSettings } from './offers.mjs';
 import { sendBackup } from './backup.mjs';
+import { weekPlanMessage } from './bot-core.mjs';
 // Course content is passed in by the host: server/content-node.mjs reads data/ for Node, the Cloudflare build bundles it.
 // Date of the current terms and privacy policy (public/terms.html, public/privacy.html). Change both when the texts change.
 const DOCUMENTS_DATE = '2026-10-29';
@@ -50,7 +51,7 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
     }
     if (!status.paid) return 'pending';
     const result = store.recordExternalPayment(provider.id, externalId, status);
-    if (result === 'new') telegram.api('sendMessage', { chat_id: order.user_id, text: 'Оплата получена, спасибо! Все уроки, промпты и база материалов открыты в мини-приложении.' }).catch(() => {});
+    if (result === 'new') telegram.api('sendMessage', { chat_id: order.user_id, text: 'Оплата получена, спасибо! Все уроки, промпты и база материалов открыты в мини-приложении.' }).then(() => telegram.api('sendMessage', { chat_id: order.user_id, ...weekPlanMessage({ done: store.getProgress(order.user_id), titles: lessons.map(l => l.title), appUrl: (process.env.APP_URL || '').replace(/\/$/, ''), support: process.env.SUPPORT_USERNAME }) })).catch(() => {});
     return result || 'mismatch';
   }
   const hasText = l => !!(l.sections?.length || l.markdown);
@@ -109,7 +110,7 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
     const articleMatch = url.pathname.match(/^\/api\/articles\/([a-z0-9-]+)$/);
     const listRoute = ['/api/prompts', '/api/articles', '/api/marks'].includes(url.pathname);
     const orderMatch = url.pathname.match(/^\/api\/order\/([0-9a-f-]{36})$/);
-    const acceptedPost = (['/api/session', '/api/progress', '/api/invoice', '/api/promo', '/api/marks', '/api/practice', '/api/event'].includes(url.pathname) || url.pathname.startsWith('/api/admin/')) && request.method === 'POST';
+    const acceptedPost = (['/api/session', '/api/progress', '/api/invoice', '/api/promo', '/api/marks', '/api/practice', '/api/event', '/api/onboarding'].includes(url.pathname) || url.pathname.startsWith('/api/admin/')) && request.method === 'POST';
     if (!acceptedPost && !((lessonMatch || resourceMatch || promptMatch || articleMatch || listRoute || adminRoute || orderMatch) && request.method === 'GET')) return send(404, { error: 'Unknown API endpoint' });
     if (preview && url.pathname === '/api/session') return send(200, { preview: true, user: null, subscribed: false, access: { active: false }, done: [] });
     const data = acceptedPost ? await body(request) : {};
@@ -164,7 +165,7 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
       if (userMatch && get) {
         const row = store.userRow(Number(userMatch[1]));
         if (!row) return send(404, { error: 'User not found' });
-        return send(200, { id: row.id, firstName: row.first_name, lastName: row.last_name, username: row.username, firstSeen: row.first_seen, lastSeen: row.last_seen, done: store.getProgress(row.id), plan: store.entitlement(row.id).active ? 'pro' : 'free', payments: store.userPayments(row.id).map(p => ({ provider: p.provider, amount: p.amount, currency: p.currency, chargeId: p.charge_id.startsWith('manual-') ? 'manual' : p.charge_id.slice(0, 12) + '…', stars: p.stars, paidAt: p.paid_at, promo: p.promo, refunded: !!p.refunded, manual: p.charge_id.startsWith('manual-') })) });
+        return send(200, { id: row.id, firstName: row.first_name, lastName: row.last_name, username: row.username, firstSeen: row.first_seen, lastSeen: row.last_seen, onboarding: store.onboarding(row.id), done: store.getProgress(row.id), plan: store.entitlement(row.id).active ? 'pro' : 'free', payments: store.userPayments(row.id).map(p => ({ provider: p.provider, amount: p.amount, currency: p.currency, chargeId: p.charge_id.startsWith('manual-') ? 'manual' : p.charge_id.slice(0, 12) + '…', stars: p.stars, paidAt: p.paid_at, promo: p.promo, refunded: !!p.refunded, manual: p.charge_id.startsWith('manual-') })) });
       }
       if (get && route === 'audit') return send(200, { items: store.auditLog().map(a => ({ at: a.at, admin: a.username ? '@' + a.username : a.first_name || String(a.admin_id), action: a.action, detail: a.detail })) });
       if (get) return send(404, { error: 'Unknown API endpoint' });
@@ -226,7 +227,7 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
       store.upsertUser(user); store.markStep(user.id, data.step);
       return send(200, { ok: true });
     }
-    if (url.pathname === '/api/session' || url.pathname === '/api/practice') store.upsertUser(user);
+    if (['/api/session', '/api/practice', '/api/onboarding'].includes(url.pathname)) store.upsertUser(user);
     let subscribed;
     let subscriptionUnavailable = false;
     try { subscribed = await subscribedUser(user.id, url.pathname === '/api/session'); }
@@ -239,7 +240,7 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
     const access = store.entitlement(user.id);
     if (subscribed && url.pathname === '/api/session') store.markStep(user.id, 'subscribed');
     const practice = () => ({ unlimited: !!access.active, limit: FREE_PRACTICE_LAUNCHES, remaining: Math.max(0, FREE_PRACTICE_LAUNCHES - store.practiceUsed(user.id)) });
-    if (url.pathname === '/api/session') return send(200, { user, subscribed, access, done: store.getProgress(user.id), isAdmin: isAdmin(user.id), practice: practice(), personalOffer: (({ code, percent, expires_at } = {}) => (code ? { code, percent, expiresAt: expires_at } : null))(store.activePersonalPromo(user.id) || undefined), ...(subscriptionUnavailable ? { subscriptionUnavailable } : {}) });
+    if (url.pathname === '/api/session') return send(200, { user, subscribed, access, done: store.getProgress(user.id), isAdmin: isAdmin(user.id), practice: practice(), onboarding: store.onboarding(user.id), personalOffer: (({ code, percent, expires_at } = {}) => (code ? { code, percent, expiresAt: expires_at } : null))(store.activePersonalPromo(user.id) || undefined), ...(subscriptionUnavailable ? { subscriptionUnavailable } : {}) });
     if (!subscribed) return send(403, { error: 'Channel subscription required', reason: 'channel' });
     if (orderMatch) {
       const order = store.order(orderMatch[1]);
@@ -260,6 +261,12 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
       if (!TRAINER_IDS.includes(data.id)) return send(400, { error: 'Unknown trainer' });
       if (!access.active) { if (store.practiceUsed(user.id) >= FREE_PRACTICE_LAUNCHES) return send(403, { error: 'Purchase required', reason: 'payment', ...practice() }); store.usePractice(user.id); }
       return send(200, { ...practice(), data: data.id === 'quiz' ? { quiz: QUIZ } : data.id === 'handover' ? { handover: HANDOVER } : {} });
+    }
+    if (url.pathname === '/api/onboarding') {
+      const goal = data.skip === true ? 'skip' : data.goal; const experience = data.skip === true ? 'skip' : data.experience;
+      if (!['own', 'earn', 'learn', 'skip'].includes(goal) || !['none', 'tried', 'pro', 'skip'].includes(experience)) return send(400, { error: 'Unknown answer' });
+      store.setOnboarding(user.id, goal, experience);
+      return send(200, { onboarding: store.onboarding(user.id) });
     }
     if (url.pathname === '/api/marks') {
       if (request.method === 'GET') return send(200, store.marks(user.id));
