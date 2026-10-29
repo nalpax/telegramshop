@@ -12,10 +12,9 @@ async function fill() {
   let data;
   try { const response = await fetch('/api/legal'); if (!response.ok) throw new Error(); data = await response.json(); } catch { return; }
   const { seller, support, prices, course } = data;
-  set('seller-status', seller.status);
-  if (seller.name) set('seller-name', seller.name);
-  if (seller.inn) set('seller-inn', seller.inn);
-  show('seller-name', !!seller.name); show('seller-inn', !!seller.inn); show('seller-missing', !seller.name || !seller.inn);
+  const sellerLine = [seller.status, seller.name, seller.inn && `ИНН ${seller.inn}`].filter(Boolean).join(', ');
+  if (sellerLine) set('seller', sellerLine);
+  show('seller', !!sellerLine);
   set('support-telegram', '@' + support.telegram);
   $$('[data-legal="support-telegram"]').forEach(a => { a.href = `https://t.me/${support.telegram}`; });
   if (support.email) { set('support-email', support.email); $$('[data-legal="support-email"]').forEach(a => { a.href = `mailto:${support.email}`; }); }

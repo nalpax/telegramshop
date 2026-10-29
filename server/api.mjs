@@ -83,14 +83,16 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
     }
     if (url.pathname === '/api/config' && request.method === 'GET') { const offer = offerFor(store); return send(200, { supportUsername: userName(process.env.SUPPORT_USERNAME), requiredChannelUrl: channelsFor(store)[0]?.url || null, requiredChannels: channelsFor(store).map(({ title, url }) => ({ title, url })), ...offer, accessMode: accessMode(), methods: methodsFor(), prices: pricesFor(store), paymentsEnabled: !!(contentReady && channelsFor(store).length > 0 && methodsFor().length > 0), preview, freeLessons: FREE_LESSONS, library: { prompts: promptIndex.size, articles: articleIndex.size } }); }
     // Public facts for the documents pages (tariffs, terms, privacy, contacts): no Telegram login, no secrets.
-    // Seller details come from SELLER_NAME / SELLER_INN in the server settings; nothing is shown if they are missing or malformed.
+    // Seller details are optional (SELLER_STATUS / SELLER_NAME / SELLER_INN): by default the documents name only the service
+    // administration and the support contact. Nothing is shown if a value is missing or malformed.
     if (url.pathname === '/api/legal' && request.method === 'GET') {
       const name = String(process.env.SELLER_NAME || '').trim().slice(0, 120);
+      const status = String(process.env.SELLER_STATUS || '').trim().slice(0, 120);
       const inn = String(process.env.SELLER_INN || '').trim();
       const email = String(process.env.SUPPORT_EMAIL || '').trim();
       const bot = String(process.env.BOT_USERNAME || '').trim().replace(/^@/, '');
       return send(200, {
-        seller: { status: 'самозанятый (плательщик налога на профессиональный доход)', name: name || null, inn: /^\d{12}$/.test(inn) ? inn : null },
+        seller: { status: status || null, name: name || null, inn: /^(\d{10}|\d{12})$/.test(inn) ? inn : null },
         support: { telegram: userName(process.env.SUPPORT_USERNAME), email: /^[^\s@]{1,64}@[^\s@]{1,190}\.[a-z]{2,24}$/i.test(email) ? email : null, bot: /^[a-zA-Z0-9_]{5,32}$/.test(bot) ? bot : null },
         prices: pricesFor(store), course: { lessons: 24, freeLessons: FREE_LESSONS, prompts: promptIndex.size, articles: articleIndex.size }, documentsDate: DOCUMENTS_DATE,
       });
