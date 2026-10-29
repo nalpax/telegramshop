@@ -27,10 +27,11 @@ with sync_playwright() as p:
         page.get_by_text('Большие проекты').wait_for()
         page.screenshot(path=str(out / f'gate-{width}.png'), full_page=True)
         page.get_by_role('button', name='Посмотреть дизайн в демо-режиме').click()
-        page.get_by_role('button', name='Начать бесплатно').wait_for()
+        page.get_by_text('Ваш сайт обретает форму').wait_for()
+        page.locator('.stage-steps li').first.wait_for()  # the demo project loads from the server
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), 'Horizontal overflow'
         page.screenshot(path=str(out / f'home-{width}.png'), full_page=True)
-        page.get_by_role('button', name='Начать бесплатно').click()
+        page.get_by_role('button', name='Начать урок').click()
         page.get_by_role('checkbox').wait_for()
         assert page.get_by_role('button', name='Завершить урок').is_disabled()
         assert len(page.locator('.article-body').inner_text()) > 1000, 'Actual course text must be loaded'
@@ -40,8 +41,10 @@ with sync_playwright() as p:
         page.wait_for_url('**#lesson?id=2')  # free lessons lead straight to the next one
         page.evaluate("location.hash = '#home'")
         page.get_by_text('Пройдено 1 из 24 уроков').wait_for()
-        page.get_by_role('link', name='Материалы', exact=True).click()
-        page.locator('[data-action="lesson"][data-id="6"]').click()
+        page.evaluate("location.hash = '#lessons'")
+        page.locator('#lesson-results [data-action="lesson"][data-id="6"]').click()
+        if width >= 1024:  # on a computer the first tap chooses the lesson, the panel button opens it
+            page.locator('[data-action="lesson-open"][data-id="6"]').click()
         page.get_by_role('dialog').wait_for()
         page.get_by_role('dialog').locator('[data-action="pay-stub"]').click()  # demo: payments are off, a clear stub is shown
         page.locator('#pay-stub:not(.is-hidden)').wait_for()
@@ -51,12 +54,12 @@ with sync_playwright() as p:
         page.get_by_role('searchbox').fill('zzzzzzzzz')
         page.get_by_text('Пока ничего не нашлось').wait_for()
         page.get_by_role('searchbox').fill('')
-        page.get_by_role('link', name='Промпты', exact=True).click()
-        page.locator('.prompt-card, .empty-state').first.wait_for()
-        page.get_by_role('link', name='База', exact=True).click()
-        page.locator('.base-row, .empty-state').first.wait_for()
-        if page.locator('[data-action="article"][data-id="start-how"]').count():  # only when the private library is installed
-            page.locator('[data-action="article"][data-id="start-how"]').click()
+        page.evaluate("location.hash = '#materials?tab=prompts'")
+        page.locator('.mat-card, .empty-state').first.wait_for()
+        page.evaluate("location.hash = '#materials?tab=base'")
+        page.locator('.mat-card, .empty-state').first.wait_for()
+        if page.locator('[data-action="mat-select"][data-id="start-how"]').count():  # only when the private library is installed
+            page.evaluate("location.hash = '#article?id=start-how'")
             page.locator('.article-body').wait_for()
             assert len(page.locator('.article-body').inner_text()) > 300
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), 'Horizontal overflow in article'
@@ -116,13 +119,43 @@ with sync_playwright() as p:
             page.reload(wait_until='load'); star.wait_for()
             assert star.get_attribute('aria-pressed') == 'true', 'bookmark is kept on the server'
             page.goto(signed_url + '#materials?tab=favorites', wait_until='load')
-            page.locator('.fav-row').first.wait_for()
+            page.locator('.mat-card').first.wait_for()
             check_layout(page, f'favorites-{width}')
-            page.locator('.fav-row [data-action="favorite"]').first.click()
+            page.locator('.mat-card [data-action="favorite"]').first.click()
             page.get_by_text('Здесь будут ваши закладки').wait_for()
             page.evaluate("location.hash = '#home'")
             page.locator('.recent-item[data-action="lesson"][data-id="6"]').wait_for()
             check_layout(page, f'home-recent-{width}')
+            assert not page.errors, page.errors
+            context.close()
+
+        # Learning project and lesson exercises: mistake, retry, saved after reload, stage view, all widths.
+        context, page = open_as(778, 390, 844)
+        page.goto(signed_url + '#practice?ex=task-prompt', wait_until='load')
+        page.locator('#ex-text').wait_for()
+        page.locator('[data-action="ex-check"]').click()
+        page.locator('.ex-result.is-retry').wait_for()
+        page.locator('#ex-text').fill('Создай учебную страницу для репетитора. Для кого: родители школьников. Блоки: шапка; первый экран; три формата занятий; контакт. Сначала покажи план.')
+        page.locator('[data-action="ex-check"]').click()
+        page.locator('.ex-result.is-passed').wait_for()
+        page.reload(wait_until='load'); page.locator('.ex-status.is-passed').wait_for()
+        page.goto(signed_url + '#practice?ex=style-contrast', wait_until='load')
+        page.locator('.exercise.is-locked').wait_for()
+        assert '#C8C8C8' not in page.content(), 'locked exercise content is not sent'
+        page.goto(signed_url + '#project', wait_until='load')
+        page.locator('.stage-panel').wait_for()
+        page.locator('[data-action="stage"][data-id="content"]').click()
+        assert page.locator('.site3d').get_attribute('data-focus') == 'content'
+        assert page.locator('.stage-steps .is-done').count() == 0, 'viewing never completes a stage'
+        assert not page.errors, page.errors
+        context.close()
+        for width in [320, 390, 768, 1280, 1440, 1920]:
+            context, page = open_as(779, width, 900)
+            for hash in ['#home', '#lessons', '#project', '#materials', '#practice', '#lesson?id=7']:
+                page.goto(signed_url + hash, wait_until='load')
+                page.locator('.project-card, .lesson-panel-card, .lesson-row, .stage-panel, .mat-card, .pick-row, .article-body').first.wait_for()
+                page.wait_for_timeout(250)
+                check_layout(page, f'{hash}-{width}')
             assert not page.errors, page.errors
             context.close()
 
@@ -155,4 +188,4 @@ with sync_playwright() as p:
     finally:
         server.terminate()
     browser.close()
-print(json.dumps({'viewports': [320, 390, 1280], 'result': 'PASS', 'flows': ['gate', 'home', 'real lesson', 'progress', 'paywall', 'search', 'resources', 'profile', 'onboarding', 'checkout', 'favorites', 'recently opened', 'admin system', 'admin funnel', 'admin price']}, ensure_ascii=False))
+print(json.dumps({'viewports': [320, 390, 768, 1280, 1440, 1920], 'result': 'PASS', 'flows': ['gate', 'home', 'real lesson', 'progress', 'paywall', 'search', 'resources', 'profile', 'onboarding', 'checkout', 'favorites', 'recently opened', 'exercise retry', 'saved result', 'locked exercise', 'project stages', 'widths 320–1920', 'admin system', 'admin funnel', 'admin price']}, ensure_ascii=False))

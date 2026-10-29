@@ -368,3 +368,8 @@ body{background:var(--bg)}
   body.reading{padding-left:0}
   .app-shell.reader-shell{max-width:860px;padding-left:32px;padding-right:32px}
 }
+
+/* project card: copy and art side by side, stage steps across the whole card on a phone */
+.project-card{grid-template-areas:"copy art" "foot foot"}
+.project-copy{grid-area:copy}.project-art{grid-area:art}.project-foot{grid-area:foot;min-width:0}
+@media(min-width:1024px){.home-grid>.project-card{grid-template-areas:"copy art" "foot art";align-content:center}}

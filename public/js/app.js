@@ -86,12 +86,12 @@ const DRAFT_KEY = 'vibentry.drafts.v1';
 const wide = () => matchMedia('(min-width:1024px)').matches;
 let projectLoading = null; let exListLoading = null;
 function loadProject(force = false) {
-  if ((project && !force) || projectLoading) return projectLoading;
+  if ((project && !force) || projectLoading) return projectLoading || Promise.resolve();
   projectLoading = getApi('/api/project').then(p => { project = p; projectFailed = false; }, () => { projectFailed = !project; }).finally(() => { projectLoading = null; refreshLearning(); });
   return projectLoading;
 }
 function loadExercises(force = false) {
-  if ((exList && !force) || exListLoading) return exListLoading;
+  if ((exList && !force) || exListLoading) return exListLoading || Promise.resolve();
   exListLoading = getApi('/api/exercises').then(r => { exList = r.items || []; }, () => {}).finally(() => { exListLoading = null; refreshLearning(); });
   return exListLoading;
 }
@@ -100,7 +100,8 @@ function refreshLearning() {
   const blocks = { 'project-card': projectCard, 'home-practice': homePractice };
   document.querySelectorAll('[data-learn]').forEach(node => {
     const name = node.dataset.learn;
-    if (blocks[name]) node.outerHTML = blocks[name]();
+    // Re-draw only when the data behind the block changed (keeps the site's assembly animation and typing focus).
+    if (blocks[name]) { const html = blocks[name](); const sig = /data-sig="([^"]*)"/.exec(html)?.[1]; if (sig !== node.dataset.sig) node.outerHTML = html; }
     else if (name === 'project-view') { if (project && !project.stages.some(s => s.id === viewStage)) viewStage = project.stages[project.current].id; node.innerHTML = projectBody(); }
     else if (name === 'lesson-panel') node.innerHTML = lessonPanel(Number(node.dataset.id));
     else if (name === 'practice-list') { const q = new URLSearchParams(location.hash.split('?')[1] || ''); if (!q.get('ex') && !q.get('id')) { const shown = document.querySelector('#practice-work [data-ex-slot]')?.dataset.exSlot; if (shown) q.set('ex', shown); } node.innerHTML = practiceList2(q); }
@@ -248,7 +249,8 @@ const MODULE_ART = { 1: 'template', 2: 'palette', 3: 'brief', 4: 'checklist' };
 function projectCard() {
   const p = project; const done = p?.completed || 0; const cur = p?.stages?.[p.current];
   const line = !p ? (projectFailed ? 'Не удалось загрузить проект.' : 'Загружаем проект…') : done === 4 ? 'Все 4 этапа завершены' : `Учебный проект · этап ${p.current + 1} из 4 · ${e(cur.title)}`;
-  return `<section class="project-card" data-learn="project-card" aria-labelledby="project-title"><div class="project-copy"><span class="eyebrow">Ваш следующий шаг</span><h1 id="project-title">Ваш сайт обретает форму</h1><p>Проходите уроки, выполняйте задания — и учебный сайт собирается вместе с вами.</p><p class="project-line">${line}</p>${p ? stageStepper(p, '') : projectFailed ? '<button class="button button-secondary" data-action="project-retry">Повторить</button>' : ''}<a class="text-link project-open" href="#project">Открыть проект${icon('arrow')}</a></div><div class="project-art">${site3d(done, '')}</div></section>`;
+  const sig = p ? `${done}:${p.current}:${p.stages.map(s => s.ready).join('')}` : projectFailed ? 'failed' : 'loading';
+  return `<section class="project-card" data-learn="project-card" data-sig="${sig}" aria-labelledby="project-title"><div class="project-copy"><span class="eyebrow">Ваш следующий шаг</span><h1 id="project-title">Ваш сайт обретает форму</h1><p>Проходите уроки, выполняйте задания — и учебный сайт собирается вместе с вами.</p></div><div class="project-art">${site3d(done, '')}</div><div class="project-foot"><p class="project-line">${line}</p>${p ? stageStepper(p, '') : projectFailed ? '<button class="button button-secondary" data-action="project-retry">Повторить</button>' : ''}<a class="text-link project-open" href="#project">Открыть проект${icon('arrow')}</a></div></section>`;
 }
 function lessonNowCard() {
   const l = nextLesson();
@@ -262,14 +264,14 @@ function lessonNowCard() {
 // «Ваша практика»: the next lesson exercise this account can do, right on the home screen.
 function homePractice() {
   const head = `<div class="section-heading"><h2>Ваша практика</h2><a class="section-link" href="#practice">Все задания${icon('chevron')}</a></div>`;
-  if (!exList) return `<section class="home-practice" data-learn="home-practice">${head}<div class="loading" role="status">Загружаем задания<span></span></div></section>`;
+  if (!exList) return `<section class="home-practice" data-learn="home-practice" data-sig="loading">${head}<div class="loading" role="status">Загружаем задания<span></span></div></section>`;
   const next = exList.find(x => x.open && !x.passed);
   if (!next) {
     const locked = exList.find(x => !x.open);
-    return `<section class="home-practice" data-learn="home-practice">${head}<div class="empty-state compact">${icon('check')}<h3>Доступные задания засчитаны</h3><p>${locked ? `Остальные ${exList.filter(x => !x.open).length} заданий откроются вместе с уроками полного курса.` : 'Можно вернуться к любому заданию и пройти его ещё раз.'}</p><a class="button button-secondary" href="#practice">Открыть практику${icon('arrow')}</a></div></section>`;
+    return `<section class="home-practice" data-learn="home-practice" data-sig="none">${head}<div class="empty-state compact">${icon('check')}<h3>Доступные задания засчитаны</h3><p>${locked ? `Остальные ${exList.filter(x => !x.open).length} заданий откроются вместе с уроками полного курса.` : 'Можно вернуться к любому заданию и пройти его ещё раз.'}</p><a class="button button-secondary" href="#practice">Открыть практику${icon('arrow')}</a></div></section>`;
   }
   ensureExercise(next.id);
-  return `<section class="home-practice" data-learn="home-practice">${head}${exerciseSlot(next.id, true)}</section>`;
+  return `<section class="home-practice" data-learn="home-practice" data-sig="${next.id}">${head}${exerciseSlot(next.id, true)}</section>`;
 }
 function homeMaterials() {
   const card = (artKind, title, text, href, label) => `<a class="mat-tile" href="${href}"><span class="mat-tile-art">${art3d(artKind)}</span><span class="mat-tile-copy"><strong>${title}</strong><small>${text}</small><span class="mat-tile-go">${label}${icon('arrow')}</span></span></a>`;
