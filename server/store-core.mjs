@@ -17,6 +17,8 @@ export class StoreCore {
     const addColumn = (table, column, ddl) => { try { this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`); } catch (error) { if (!/duplicate column/i.test(String(error?.message))) throw error; } };
     addColumn('orders', 'promo', 'TEXT'); addColumn('orders', 'provider', "TEXT NOT NULL DEFAULT 'stars'"); addColumn('orders', 'currency', 'TEXT'); addColumn('orders', 'amount', 'REAL');
     addColumn('payments', 'provider', "TEXT NOT NULL DEFAULT 'stars'"); addColumn('payments', 'amount', 'REAL'); addColumn('payments', 'currency', 'TEXT');
+    this.db.exec(`CREATE TABLE IF NOT EXISTS favorites (user_id INTEGER NOT NULL, prompt_id TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY(user_id, prompt_id));
+      CREATE TABLE IF NOT EXISTS task_checks (user_id INTEGER NOT NULL, lesson_id INTEGER NOT NULL, item INTEGER NOT NULL, PRIMARY KEY(user_id, lesson_id, item));`);
     this.db.exec("CREATE TABLE IF NOT EXISTS provider_invoices (provider TEXT NOT NULL, external_id TEXT NOT NULL, order_id TEXT NOT NULL REFERENCES orders(id), created_at INTEGER NOT NULL, PRIMARY KEY(provider, external_id))");
   }
   createOrder(userId, stars, mode, promo = null) { const id = randomUUID(); this.db.prepare('INSERT INTO orders (id,user_id,stars,mode,created_at,promo) VALUES (?,?,?,?,?,?)').run(id, userId, stars, mode, Date.now(), promo); return this.order(id); }
@@ -57,7 +59,16 @@ export class StoreCore {
   saveProviderState(state) { this.db.prepare("INSERT INTO settings VALUES ('providers',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify(state)); }
   getProgress(userId) { return this.db.prepare('SELECT lesson_id FROM progress WHERE user_id=? ORDER BY lesson_id').all(userId).map(r => r.lesson_id); }
   complete(userId, lesson) { this.db.prepare('INSERT OR IGNORE INTO progress VALUES (?,?,?)').run(userId, lesson, Date.now()); }
-  reset(userId) { this.db.prepare('DELETE FROM progress WHERE user_id=?').run(userId); }
+  reset(userId) { this.db.prepare('DELETE FROM progress WHERE user_id=?').run(userId); this.db.prepare('DELETE FROM task_checks WHERE user_id=?').run(userId); }
+  // ---- favourite prompts and ticked checklist items in lessons ----
+  marks(userId) {
+    const favorites = this.db.prepare('SELECT prompt_id FROM favorites WHERE user_id=? ORDER BY prompt_id').all(userId).map(r => r.prompt_id);
+    const tasks = {};
+    for (const r of this.db.prepare('SELECT lesson_id, item FROM task_checks WHERE user_id=? ORDER BY lesson_id, item').all(userId)) (tasks[r.lesson_id] ||= []).push(r.item);
+    return { favorites, tasks };
+  }
+  setFavorite(userId, promptId, on) { if (on) this.db.prepare('INSERT OR IGNORE INTO favorites VALUES (?,?,?)').run(userId, promptId, Date.now()); else this.db.prepare('DELETE FROM favorites WHERE user_id=? AND prompt_id=?').run(userId, promptId); }
+  setTask(userId, lessonId, item, on) { if (on) this.db.prepare('INSERT OR IGNORE INTO task_checks VALUES (?,?,?)').run(userId, lessonId, item); else this.db.prepare('DELETE FROM task_checks WHERE user_id=? AND lesson_id=? AND item=?').run(userId, lessonId, item); }
   refund(chargeId) { if (typeof chargeId === 'string') this.db.prepare('INSERT OR IGNORE INTO refunds VALUES (?,?)').run(chargeId, Date.now()); }
   settings() { try { return JSON.parse(this.db.prepare("SELECT value FROM settings WHERE key='offer'").get()?.value || '{}'); } catch { return {}; } }
   saveSettings(value) { this.db.prepare("INSERT INTO settings VALUES ('offer',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify(value)); }

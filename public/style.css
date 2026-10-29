@@ -340,3 +340,16 @@ body.reading .lesson-article img{-webkit-user-drag:none;pointer-events:none}
 .after-free .button{margin-bottom:10px}
 @keyframes pop{0%{transform:scale(.4);opacity:0}70%{transform:scale(1.08);opacity:1}100%{transform:scale(1)}}
 @media (prefers-reduced-motion:reduce){.after-badge{animation:none}}
+/* Favourites, «show more», interactive checklists, next lesson card. */
+.prompt-item .prompt-card{padding-right:112px}
+.fav-quick{position:absolute;top:50%;right:60px;transform:translateY(-50%);width:44px;height:44px;display:grid;place-items:center;border-radius:12px;border:1px solid transparent;background:transparent;color:var(--soft);transition:color .15s,transform .1s}
+.fav-quick .icon{width:20px;height:20px}.fav-quick.is-on{color:var(--gold)}.fav-quick.is-on .icon{fill:currentColor}.fav-quick:active{transform:translateY(-50%) scale(.9)}
+.chip-special{display:inline-flex;align-items:center;gap:6px}.chip-special .icon{width:16px;height:16px}
+.more-button{width:100%;margin-top:12px}
+.task-item[role=checkbox]{cursor:pointer;min-height:44px;border-radius:10px;transition:background .15s;-webkit-tap-highlight-color:transparent}
+.task-item[role=checkbox]:hover{background:#0f3524}.task-item[role=checkbox]:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.task-item.is-checked>span:last-child{color:var(--soft);text-decoration:line-through;text-decoration-color:#86ac8c80}
+.task-item .task-box{transition:background .15s,border-color .15s,transform .15s}.task-item.is-checked .task-box{transform:scale(1.06)}
+.next-lesson{display:flex;width:100%;align-items:center;justify-content:space-between;gap:12px;margin-top:16px;padding:14px 16px;min-height:64px;border:1px solid var(--border);border-radius:16px;background:var(--surface);color:var(--text);text-align:left;text-decoration:none;font:inherit;cursor:pointer}
+.next-lesson span{display:flex;flex-direction:column;gap:2px}.next-lesson small{color:var(--soft);font-size:12px;letter-spacing:.04em;text-transform:uppercase}.next-lesson strong{font-size:15px;line-height:1.35}
+.next-lesson .icon{flex:none;color:var(--accent)}.next-lesson.is-locked .icon{color:var(--lock)}

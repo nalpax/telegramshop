@@ -17,6 +17,15 @@ let readerId = 0;
 let readerCodes = [];
 let catalogueTab = 'lessons';
 let promptCategory = 'all';
+let promptLimit = 30;
+// Favourite prompts and ticked checklist items live on the server (/api/marks); recently copied prompts are a per-device convenience.
+let marks = { favorites: [], tasks: {} };
+const RECENT_KEY = 'vibentry.recent.v1'; const SCROLL_KEY = 'vibentry.scroll.v1';
+const readLocal = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } };
+const writeLocal = (key, value) => { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} };
+function pushRecent(id) { writeLocal(RECENT_KEY, [id, ...readLocal(RECENT_KEY, []).filter(x => x !== id)].slice(0, 12)); }
+async function loadMarks() { if (config.preview || !session?.subscribed) return; try { marks = await getApi('/api/marks'); } catch {} }
+async function saveMark(change) { if (config.preview) return true; try { marks = await sendApi('/api/marks', change); return true; } catch (error) { if (error.status === 403) openAccess(); else toast('Не удалось сохранить. Проверьте соединение.'); return false; } }
 const library = { prompts: null, articles: null, failed: {} };
 let renderEpoch = 0;
 let promoApplied = null;
@@ -98,11 +107,18 @@ function promptsBody(query) {
   const { categories, items } = library.prompts;
   if (!items.length) return `<div class="empty-state">${icon('copy')}<h2>Промпты скоро появятся</h2><p>Библиотека из 300 запросов подключается вместе с остальными материалами курса.</p></div>`;
   const byId = new Map(items.map(item => [item.id, item]));
-  const chips = `<div class="chips" role="group" aria-label="Категории промптов"><button class="chip ${promptCategory === 'all' ? 'selected' : ''}" data-action="prompt-category" data-id="all">Все ${items.length}</button>${categories.map((c, i) => `<button class="chip ${promptCategory === c.id ? 'selected' : ''}" data-action="prompt-category" data-id="${e(c.id)}">${e(c.title)} <span>${c.ids.length}</span></button>`).join('')}</div>`;
-  const chosen = promptCategory === 'all' ? items : (categories.find(c => c.id === promptCategory)?.ids || []).map(id => byId.get(id)).filter(Boolean);
-  const rows = chosen.filter(item => matches(query, item.id, item.title, item.use));
+  const recent = readLocal(RECENT_KEY, []).filter(id => byId.has(id));
+  const special = [['fav', 'Избранное', marks.favorites.length], ['recent', 'Недавние', recent.length]].filter(([, , n]) => n > 0).map(([id, label, n]) => `<button class="chip chip-special ${promptCategory === id ? 'selected' : ''}" data-action="prompt-category" data-id="${id}">${id === 'fav' ? icon('star') : icon('clock')}${label} <span>${n}</span></button>`).join('');
+  const chips = `<div class="chips" role="group" aria-label="Категории промптов"><button class="chip ${promptCategory === 'all' ? 'selected' : ''}" data-action="prompt-category" data-id="all">Все ${items.length}</button>${special}${categories.map((c, i) => `<button class="chip ${promptCategory === c.id ? 'selected' : ''}" data-action="prompt-category" data-id="${e(c.id)}">${e(c.title)} <span>${c.ids.length}</span></button>`).join('')}</div>`;
+  const ids = promptCategory === 'fav' ? marks.favorites : promptCategory === 'recent' ? recent : categories.find(c => c.id === promptCategory)?.ids;
+  const chosen = promptCategory === 'all' || !ids ? items : ids.map(id => byId.get(id)).filter(Boolean);
+  const all = chosen.filter(item => matches(query, item.id, item.title, item.use));
+  const rows = all.slice(0, promptLimit); const rest = all.length - rows.length;
   const locked = !session?.access?.active;
-  return `${chips}<div class="prompt-list">${rows.map(item => `<div class="prompt-item"><button class="prompt-card ${locked ? 'is-locked' : ''}" data-action="prompt" data-id="${e(item.id)}"><span class="prompt-number">${e(item.id)}</span><span class="prompt-info"><strong>${e(item.title)}</strong><small>${e(item.use)}</small></span></button><button class="copy-quick ${locked ? 'is-locked' : ''}" data-action="quick-copy" data-id="${e(item.id)}" aria-label="${locked ? 'Откроется после покупки' : 'Скопировать промпт ' + e(item.id)}">${icon(locked ? 'lock' : 'copy')}</button></div>`).join('') || emptySearch()}</div>`;
+  const star = item => { const on = marks.favorites.includes(item.id); return `<button class="fav-quick ${on ? 'is-on' : ''}" data-action="favorite" data-id="${e(item.id)}" aria-pressed="${on}" aria-label="${on ? 'Убрать из избранного' : 'В избранное'}: промпт ${e(item.id)}">${icon('star')}</button>`; };
+  const more = rest > 0 ? `<button class="button button-secondary more-button" data-action="more-prompts">Показать ещё ${Math.min(30, rest)} · осталось ${rest}</button>` : '';
+  const emptyFav = promptCategory === 'fav' && !all.length ? `<div class="empty-state">${icon('star')}<h2>Здесь будут избранные промпты</h2><p>Нажмите звёздочку рядом с промптом, чтобы он всегда был под рукой.</p></div>` : '';
+  return `${chips}${emptyFav}<div class="prompt-list">${rows.map(item => `<div class="prompt-item">${star(item)}<button class="prompt-card ${locked ? 'is-locked' : ''}" data-action="prompt" data-id="${e(item.id)}"><span class="prompt-number">${e(item.id)}</span><span class="prompt-info"><strong>${e(item.title)}</strong><small>${e(item.use)}</small></span></button><button class="copy-quick ${locked ? 'is-locked' : ''}" data-action="quick-copy" data-id="${e(item.id)}" aria-label="${locked ? 'Откроется после покупки' : 'Скопировать промпт ' + e(item.id)}">${icon(locked ? 'lock' : 'copy')}</button></div>`).join('') || (emptyFav ? '' : emptySearch())}</div>${more}`;
 }
 function baseBody(query) {
   const notice = libraryNotice('articles'); if (notice) return notice;
@@ -154,8 +170,12 @@ function lessonHtml(id, meta, content) {
     practice = `<section class="practice"><span class="eyebrow">СДЕЛАЙТЕ СЕЙЧАС</span><h2>Попробуйте на своём проекте</h2><p>${e(content.task)}</p><label class="task-check"><input type="checkbox" id="task-done" ${checked ? 'checked' : ''}><span class="check-visual">${icon('check')}</span><span>${e(content.confirmation)}</span></label></section>`;
   }
   readerCodes = codes;
-  const footnote = id < 24 ? `Далее: ${e(lessons[id].title)}` : 'Вы прошли весь курс. Пора применять знания!';
-  return `<header class="reader-header"><a href="${urlFor()}" class="back-link">${icon('back')}Все уроки</a>${brand(true)}</header><article class="lesson-article"><div class="reader-meta"><span class="eyebrow">УРОК ${String(id).padStart(2, '0')} / 24</span><span class="free-label">${meta.free ? 'Бесплатно' : 'Полный доступ'}</span></div><h1>${e(meta.title)}</h1><div class="outcome">${icon('target')}<p><span>РЕЗУЛЬТАТ УРОКА</span>${e(content.outcome)}</p></div><div class="article-body">${bodyHtml}</div>${practice}<button class="button button-primary finish-button" data-action="finish" ${checked ? '' : 'disabled'}>${progress.done.includes(id) ? 'К следующему шагу' : 'Завершить урок'}${icon('arrow')}</button><p class="reader-footnote">${footnote}</p></article>`;
+  const upcoming = lessons[id];
+  const nextLocked = upcoming && !upcoming.free && !session?.access?.active;
+  const footnote = !upcoming ? '<p class="reader-footnote">Вы прошли весь курс. Пора применять знания!</p>'
+    : id === FREE_LESSONS && nextLocked ? `<a class="next-lesson" href="#next"><span><small>Бесплатная часть пройдена</small><strong>Что дальше в курсе</strong></span>${icon('arrow')}</a>`
+    : `<button class="next-lesson ${nextLocked ? 'is-locked' : ''}" data-action="lesson" data-id="${upcoming.id}"><span><small>Следующий урок</small><strong>${String(upcoming.id).padStart(2, '0')} · ${e(upcoming.title)}</strong></span>${icon(nextLocked ? 'lock' : 'arrow')}</button>`;
+  return `<header class="reader-header"><a href="${urlFor()}" class="back-link">${icon('back')}Все уроки</a>${brand(true)}</header><article class="lesson-article"><div class="reader-meta"><span class="eyebrow">УРОК ${String(id).padStart(2, '0')} / 24</span><span class="free-label">${meta.free ? 'Бесплатно' : 'Полный доступ'}</span></div><h1>${e(meta.title)}</h1><div class="outcome">${icon('target')}<p><span>РЕЗУЛЬТАТ УРОКА</span>${e(content.outcome)}</p></div><div class="article-body">${bodyHtml}</div>${practice}<button class="button button-primary finish-button" data-action="finish" ${checked ? '' : 'disabled'}>${progress.done.includes(id) ? 'К следующему шагу' : 'Завершить урок'}${icon('arrow')}</button>${footnote}</article>`;
 }
 async function reader(id, epoch) {
   const meta = lessons.find(l => l.id === id);
@@ -173,6 +193,7 @@ async function reader(id, epoch) {
   if (epoch !== renderEpoch) return;
   app.innerHTML = lessonHtml(id, meta, content);
   window.scrollTo({ top: 0, behavior: 'instant' });
+  wireChecklist(id); restoreScroll(id);
 }
 async function articleReader(id, epoch) {
   const info = library.articles?.items.find(a => a.id === id);
@@ -276,7 +297,7 @@ async function quickCopy(id, button) {
       const pending = load(); await navigator.clipboard.write([new ClipboardItem({ 'text/plain': pending.then(value => new Blob([value], { type: 'text/plain' })) })]); text = await pending;
     } else { text = await load(); await navigator.clipboard.writeText(text); }
     button.classList.add('is-done'); button.innerHTML = icon('check'); setTimeout(() => { if (button.isConnected) { button.classList.remove('is-done'); button.innerHTML = icon('copy'); } }, 1600);
-    toast('Промпт скопирован. Замените [скобки] своими данными.');
+    pushRecent(id); toast('Промпт скопирован. Замените [скобки] своими данными.');
   } catch (error) {
     if (error.payment) return openAccess();
     try { const text = await load(); copy(text); } catch { toast('Не получилось скопировать. Откройте промпт и нажмите «Копировать».'); }
@@ -291,7 +312,7 @@ async function openPrompt(id) {
     if (!response.ok) throw new Error();
     const item = await response.json();
     modal(e(item.title), `<p>${e(item.use || card?.use || '')}</p><div class="template-preview prompt-preview"><pre>${e(item.text)}</pre></div><button class="button button-primary" id="resource-copy">Копировать промпт${icon('copy')}</button><p class="modal-note">Промпт № ${e(item.id)}. Всё, что в квадратных скобках, замените своими данными.</p>`);
-    overlay.querySelector('#resource-copy').onclick = () => copy(item.text);
+    overlay.querySelector('#resource-copy').onclick = () => { pushRecent(item.id); copy(item.text); };
   } catch { toast('Промпт недоступен. Проверьте доступ и соединение.'); }
 }
 document.addEventListener('click', event => {
@@ -320,7 +341,10 @@ document.addEventListener('click', event => {
   if (action === 'reauth') { sessionError = false; initialize(); }
   if (action === 'resource') openResource(target.dataset.id);
   if (action === 'prompt') openPrompt(target.dataset.id);
-  if (action === 'prompt-category') { promptCategory = target.dataset.id; refreshResults(); }
+  if (action === 'prompt-category') { promptCategory = target.dataset.id; promptLimit = 30; refreshResults(); }
+  if (action === 'more-prompts') { promptLimit += 30; refreshResults(); }
+  if (action === 'favorite') toggleFavorite(target.dataset.id);
+  if (action === 'task-item') toggleTask(target);
   if (action === 'article') { const info = library.articles?.items.find(a => a.id === target.dataset.id); if (info && !info.free && !session?.access?.active) return openAccess(); go('#article?id=' + target.dataset.id); }
   if (action === 'reload-library') loadLibrary(catalogueTab, true);
   if (action === 'copy-code') { const code = readerCodes[Number(target.dataset.index)]; if (code) copy(code); }
@@ -331,7 +355,45 @@ document.addEventListener('click', event => {
   if (action === 'confirm-reset') resetAllProgress(target);
 });
 document.addEventListener('change', event => { if (event.target.id === 'task-done') { checked = event.target.checked; app.querySelector('.finish-button').disabled = !checked; } });
-document.addEventListener('input', event => { if (event.target.id === 'material-search') { search = event.target.value; refreshResults(); } });
+document.addEventListener('input', event => { if (event.target.id === 'material-search') { search = event.target.value; promptLimit = 30; refreshResults(); } });
+async function toggleFavorite(id) {
+  const on = !marks.favorites.includes(id);
+  marks.favorites = on ? [...marks.favorites, id].sort() : marks.favorites.filter(x => x !== id); refreshResults();
+  try { tg?.HapticFeedback.selectionChanged(); } catch {}
+  if (!(await saveMark({ favorite: { id, on } }))) { marks.favorites = on ? marks.favorites.filter(x => x !== id) : [...marks.favorites, id].sort(); refreshResults(); }
+  else if (on) toast('Добавлено в избранное.');
+}
+// Checklist items («Готово, когда») inside a lesson become real checkboxes, saved per account.
+function wireChecklist(id) {
+  const done = new Set(marks.tasks[id] || []);
+  app.querySelectorAll('.lesson-article .task-item').forEach((item, index) => {
+    const on = done.has(index);
+    Object.assign(item.dataset, { action: 'task-item', index: String(index) });
+    item.setAttribute('role', 'checkbox'); item.setAttribute('tabindex', '0'); item.setAttribute('aria-checked', String(on));
+    item.classList.toggle('is-checked', on); item.querySelector('.task-box')?.classList.toggle('is-done', on);
+  });
+}
+async function toggleTask(item) {
+  const id = readerId; const index = Number(item.dataset.index); const on = item.getAttribute('aria-checked') !== 'true';
+  const paint = value => { item.setAttribute('aria-checked', String(value)); item.classList.toggle('is-checked', value); item.querySelector('.task-box')?.classList.toggle('is-done', value); };
+  paint(on); try { tg?.HapticFeedback.selectionChanged(); } catch {}
+  if (!(await saveMark({ task: { lessonId: id, index, on } }))) paint(!on);
+  const list = app.querySelectorAll('.lesson-article .task-item');
+  if (on && list.length && [...list].every(x => x.getAttribute('aria-checked') === 'true')) toast('Все пункты выполнены. Можно завершать урок.');
+}
+document.addEventListener('keydown', event => { const item = event.target.closest?.('.task-item[role=checkbox]'); if (item && (event.key === ' ' || event.key === 'Enter')) { event.preventDefault(); toggleTask(item); } });
+// Where the reader stopped in a long lesson (per device).
+let scrollTimer;
+window.addEventListener('scroll', () => {
+  if (!readerId || route().name !== 'lesson') return;
+  clearTimeout(scrollTimer);
+  scrollTimer = setTimeout(() => { const max = document.documentElement.scrollHeight - innerHeight; if (max > 0 && readerId) writeLocal(SCROLL_KEY, { ...readLocal(SCROLL_KEY, {}), [readerId]: Math.round(scrollY / max * 1000) / 1000 }); }, 400);
+}, { passive: true });
+function restoreScroll(id) {
+  const ratio = readLocal(SCROLL_KEY, {})[id];
+  if (!(ratio > 0.05 && ratio < 0.95) || progress.done.includes(id)) return;
+  requestAnimationFrame(() => { window.scrollTo({ top: ratio * (document.documentElement.scrollHeight - innerHeight), behavior: 'instant' }); toast('Продолжаем с места, где вы остановились.'); });
+}
 document.addEventListener('keydown', event => {
   if (!overlay.innerHTML) return;
   if (event.key === 'Escape') closeModal();
@@ -361,6 +423,7 @@ const admin = createAdmin({ sendApi, getApi, toast, modal, closeModal, config: {
 async function refreshSession() {
   const data = await sendApi('/api/session'); session = data; protection.refresh();
   if (!config.preview) { progress.done = data.done || []; progress.last = Math.min(24, (progress.done.at(-1) || 0) + 1); }
+  await loadMarks();
   return data;
 }
 async function initialize() {

@@ -102,9 +102,9 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
     const resourceMatch = url.pathname.match(/^\/api\/resources\/([a-z-]+)$/);
     const promptMatch = url.pathname.match(/^\/api\/prompts\/(\d{3})$/);
     const articleMatch = url.pathname.match(/^\/api\/articles\/([a-z0-9-]+)$/);
-    const listRoute = ['/api/prompts', '/api/articles'].includes(url.pathname);
+    const listRoute = ['/api/prompts', '/api/articles', '/api/marks'].includes(url.pathname);
     const orderMatch = url.pathname.match(/^\/api\/order\/([0-9a-f-]{36})$/);
-    const acceptedPost = (['/api/session', '/api/progress', '/api/invoice', '/api/promo'].includes(url.pathname) || url.pathname.startsWith('/api/admin/')) && request.method === 'POST';
+    const acceptedPost = (['/api/session', '/api/progress', '/api/invoice', '/api/promo', '/api/marks'].includes(url.pathname) || url.pathname.startsWith('/api/admin/')) && request.method === 'POST';
     if (!acceptedPost && !((lessonMatch || resourceMatch || promptMatch || articleMatch || listRoute || adminRoute || orderMatch) && request.method === 'GET')) return send(404, { error: 'Unknown API endpoint' });
     if (preview && url.pathname === '/api/session') return send(200, { preview: true, user: null, subscribed: false, access: { active: false }, done: [] });
     const data = acceptedPost ? await body(request) : {};
@@ -222,6 +222,20 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
     }
     if (url.pathname === '/api/prompts') return send(200, promptList());
     if (url.pathname === '/api/articles') return send(200, articleList());
+    if (url.pathname === '/api/marks') {
+      if (request.method === 'GET') return send(200, store.marks(user.id));
+      if (data.favorite) {
+        const id = String(data.favorite.id || '');
+        if (!promptIndex.has(id)) return send(400, { error: 'Unknown prompt' });
+        store.setFavorite(user.id, id, data.favorite.on === true);
+      } else if (data.task) {
+        const { lessonId, index, on } = data.task;
+        if (!Number.isInteger(lessonId) || lessonId < 1 || lessonId > 24 || !Number.isInteger(index) || index < 0 || index > 99) return send(400, { error: 'Invalid checklist item' });
+        if (lessonId > FREE_LESSONS && !access.active) return send(403, { error: 'Purchase required', reason: 'payment' });
+        store.setTask(user.id, lessonId, index, on === true);
+      } else return send(400, { error: 'Nothing to save' });
+      return send(200, store.marks(user.id));
+    }
     if (promptMatch) {
       const item = promptIndex.get(promptMatch[1]);
       if (!item) return send(404, { error: 'Prompt not found' });
