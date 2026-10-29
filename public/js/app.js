@@ -3,6 +3,7 @@ import { FREE_LESSONS, modules, lessons, materials } from './course.js';
 import { renderMarkdown } from './markdown.js';
 import { createAdmin, planBadge } from './admin.js';
 import { installProtection } from './protect.js';
+import { mountPractice, practiceList, practiceScreen } from './practice.js';
 import { progress, saveProgress, complete, resetProgress, escape as e } from './state.js';
 
 const app = document.querySelector('#app');
@@ -56,7 +57,7 @@ function go(hash) { if (location.hash === hash) render(); else location.hash = h
 function back() { const name = route().name; go(name === 'article' ? urlFor('base') : name === 'lesson' ? urlFor() : '#home'); }
 function brand(compact = false) { return `<a href="#home" class="brand ${compact ? 'brand-compact' : ''}" aria-label="Vibentry — главная"><span class="brand-image"><img src="/assets/brand.png" alt="Знак ve. Vibentry" width="64" height="64"></span>${compact ? '' : '<span><strong>Vibentry<span class="brand-dot">.</span></strong><span class="brand-caption">База по вайбкодингу</span></span>'}</a>`; }
 function nav(active) {
-  const items = [['home', 'home', 'Главная'], ['materials', 'book', 'Материалы'], ['profile', 'user', 'Профиль'], ...(session?.isAdmin ? [['admin', 'sparkle', 'Админка']] : [])];
+  const items = [['home', 'home', 'Главная'], ['materials', 'book', 'Материалы'], ['practice', 'play', 'Практикум'], ['profile', 'user', 'Профиль'], ...(session?.isAdmin ? [['admin', 'sparkle', 'Админка']] : [])];
   return `<nav class="bottom-nav" aria-label="Основная навигация"><a href="#home" class="nav-brand"><img src="/assets/brand.png" alt="" width="40" height="40"><span><strong>Vibentry</strong><small>курс по вайбкодингу</small></span></a>${items.map(([id, glyph, label]) => `<a href="#${id}" class="nav-item ${active === id ? 'is-active' : ''}" ${active === id ? 'aria-current="page"' : ''}>${icon(glyph)}<span>${label}</span></a>`).join('')}${planChip()}</nav>`;
 }
 function planChip() { return session?.user ? `<div class="nav-plan">${planBadge(session.access?.active ? 'pro' : 'free')}<span>${e(session.user.first_name)}</span></div>` : ''; }
@@ -76,6 +77,7 @@ function home() {
   ${hero()}
   <section class="continue-card" aria-labelledby="continue-title"><div class="continue-top"><span class="eyebrow">${eyebrow}</span>${icon(freeDone ? 'check' : 'sparkle')}</div><h2 id="continue-title">${title}</h2><div class="progress-caption"><span>Пройдено ${progress.done.length} из 24 уроков</span><span>${percent}%</span></div><progress max="24" value="${progress.done.length}" aria-label="Прогресс курса"></progress>${freeDone ? `<a class="button button-primary" href="#next">${label}${icon('arrow')}</a>` : `<button class="button button-primary" data-action="lesson" data-id="${next.id}">${label}${icon('arrow')}</button>`}</section>
   <section class="quick-section" aria-labelledby="quick-title"><div class="section-heading"><h2 id="quick-title">Быстрый доступ</h2></div><div class="quick-grid">${tile('Уроки', `24 урока,<br>${FREE_LESSONS} бесплатно`, 'book', urlFor())}${tile('Промпты', '300 запросов<br>для ИИ', 'prompts', urlFor('prompts'))}${tile('База', 'Инструменты, ниши,<br>клиенты, заказы', 'files', urlFor('base'))}${tile(session?.access?.active ? 'Мой доступ' : 'Полный доступ', session?.access?.active ? 'Всё открыто,<br>навсегда' : priceLabel() ? `${priceLabel()}<br>навсегда` : 'Один платёж,<br>навсегда', 'plane', '#access', 'access')}</div></section>
+  <a class="practice-teaser" href="#practice"><span class="practice-glyph">${icon('play')}</span><span><strong>Практикум</strong><small>Конструктор промпта, квиз, калькулятор оценки и проверка перед сдачей</small></span>${icon('arrow')}</a>
   <p class="home-note">Одна сделанная страница полезнее десяти прочитанных.</p>${nav('home')}`;
 }
 // Shown after the last free lesson: what the buyer gets next, the price, one clear button. No invented reviews or income.
@@ -240,7 +242,7 @@ function render() {
   closeModal(false);
   if (name === 'lesson') { try { tg?.BackButton.show(); } catch {} reader(Number(params.get('id')), epoch); }
   else if (name === 'article') { try { tg?.BackButton.show(); } catch {} articleReader(params.get('id') || '', epoch); }
-  else { try { tg?.BackButton.hide(); } catch {} app.innerHTML = name === 'materials' ? catalogue(params) : name === 'profile' ? profile() : name === 'admin' ? adminScreen() : name === 'next' && !session?.access?.active ? afterFree() : home(); }
+  else { try { tg?.BackButton.hide(); } catch {} app.innerHTML = name === 'materials' ? catalogue(params) : name === 'profile' ? profile() : name === 'admin' ? adminScreen() : name === 'practice' ? practiceView(params) : name === 'next' && !session?.access?.active ? afterFree() : home(); if (name === 'practice') mountPractice(app, { copy }); }
   window.scrollTo({ top: 0, behavior: 'instant' });
 }
 function toast(message) { const box = document.querySelector('#toast'); box.textContent = message; box.classList.add('visible'); clearTimeout(toastTimer); toastTimer = setTimeout(() => box.classList.remove('visible'), 3000); }
@@ -509,6 +511,7 @@ async function pay(button) {
     });
   } catch (error) { toast(error.status === 429 ? 'Подождите несколько секунд и попробуйте снова.' : 'Счёт пока недоступен. Попробуйте другой способ или напишите автору.'); if (button.isConnected) { button.disabled = false; button.textContent = 'Повторить оплату'; } }
 }
+function practiceView(params) { const id = params.get('id'); return `${id ? practiceScreen(id) : practiceList()}${nav('practice')}`; }
 function adminScreen() {
   if (!session?.isAdmin) return `<div class="empty-state"><h1>Доступ ограничен</h1><p>Этот раздел доступен только владельцу проекта.</p><a class="button button-secondary" href="#profile">В профиль</a></div>${nav('profile')}`;
   return `<header class="reader-header"><a href="#profile" class="back-link">${icon('back')}В профиль</a>${brand(true)}</header>${admin.screen()}${nav('admin')}`;
