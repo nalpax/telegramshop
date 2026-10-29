@@ -39,14 +39,32 @@ test('"Оплатить" with a live payment method opens the checkout in the ap
 test('/tariff, /start buy and the "tariff" button all show the tariff; /docs and the button show the documents', async () => {
   for (const update of [{ message: { chat: { id: 7, type: 'private' }, from: { id: 7 }, text: '/tariff' } }, { message: { chat: { id: 7, type: 'private' }, from: { id: 7 }, text: '/start buy' } }, { callback_query: { id: 'c3', from: { id: 7 }, data: 'tariff', message: { chat: { id: 7 } } } }]) {
     const t = harness(); await handleUpdate(update, { api: t.api, store: t.store, appUrl, purchase: t.purchase });
-    assert.match(t.calls.find(c => c.method === 'sendMessage').payload.text, /Полный доступ[\s\S]*1\s299 ₽/u);
+    assert.match(t.calls.find(c => ['sendMessage', 'editMessageText'].includes(c.method)).payload.text, /Полный доступ[\s\S]*1\s299 ₽/u);
   }
-  const t = harness(); await handleUpdate({ callback_query: { id: 'c4', from: { id: 7 }, data: 'docs', message: { chat: { id: 7 } } } }, { api: t.api, store: t.store, appUrl, purchase: t.purchase });
-  const docs = t.calls.find(c => c.method === 'sendMessage').payload;
+  const t = harness(); await handleUpdate({ callback_query: { id: 'c4', from: { id: 7 }, data: 'docs', message: { chat: { id: 7 }, message_id: 3 } } }, { api: t.api, store: t.store, appUrl, purchase: t.purchase });
+  const docs = t.calls.find(c => c.method === 'editMessageText').payload;
+  assert.deepEqual([docs.chat_id, docs.message_id], [7, 3], 'buttons change the same message instead of sending a new one');
   for (const page of ['tariffs', 'terms', 'privacy', 'contacts']) assert.ok(button(docs.reply_markup, b => b.url === `${appUrl}/${page}.html`), page);
   assert.deepEqual(docsMessage(appUrl).reply_markup, docs.reply_markup);
 });
 test('Without any price the tariff says so honestly and the stub still answers', () => {
   const m = tariffMessage({ ...info(), prices: { rub: null, stars: null } }, appUrl);
   assert.match(m.text, /Цена появится перед началом продаж/); assert.ok(button(m.reply_markup, b => b.callback_data === 'pay'));
+});
+test('Every bot section has «← Главное меню»; it brings back the start menu in the same message', async () => {
+  const menu = markup => markup.inline_keyboard.flat().some(b => b.callback_data === 'menu');
+  assert.ok(menu(tariffMessage(info(), appUrl).reply_markup)); assert.ok(menu(docsMessage(appUrl).reply_markup));
+  for (const command of ['/help', '/support', '/paysupport']) assert.ok(menu(messageFor(command, appUrl).reply_markup), command);
+  assert.equal(menu(messageFor('/start', appUrl).reply_markup), false, 'the start menu itself has no back button');
+  const t = harness();
+  for (const text of ['/reminders', '/offers']) await handleUpdate({ message: { chat: { id: 7, type: 'private' }, from: { id: 7 }, text } }, { api: t.api, store: t.store, appUrl, purchase: t.purchase });
+  for (const call of t.calls.filter(c => c.method === 'sendMessage')) assert.ok(menu(call.payload.reply_markup), call.payload.text.slice(0, 20));
+  t.calls.length = 0;
+  await handleUpdate({ callback_query: { id: 'm', from: { id: 7 }, data: 'menu', message: { chat: { id: 7 }, message_id: 9 } } }, { api: t.api, store: t.store, appUrl, purchase: t.purchase });
+  const edit = t.calls.find(c => c.method === 'editMessageText').payload;
+  assert.equal(edit.message_id, 9); assert.match(edit.text, /Привет! Это Vibentry/); assert.ok(button(edit.reply_markup, b => b.callback_data === 'tariff'));
+  // If the old message cannot be edited, a new one is sent instead.
+  const calls = []; const failing = async (method, payload) => { calls.push({ method, payload }); if (method === 'editMessageText') { const e = new Error('x'); e.code = 400; throw e; } return true; };
+  await handleUpdate({ callback_query: { id: 'm2', from: { id: 7 }, data: 'tariff', message: { chat: { id: 7 }, message_id: 1 } } }, { api: failing, store: t.store, appUrl, purchase: t.purchase });
+  assert.match(calls.find(c => c.method === 'sendMessage').payload.text, /Полный доступ/);
 });

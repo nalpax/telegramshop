@@ -5,10 +5,12 @@ import { FREE_LESSONS, validCheckout } from './telegram.mjs';
 export function validateAppUrl(value) {
   try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password && !!url.hostname && !['localhost', '127.0.0.1'].includes(url.hostname); } catch { return false; }
 }
+// Every section ends with a way back to the start menu (the same message is edited in place, see show()).
+export const MENU_ROW = [{ text: '← Главное меню', callback_data: 'menu' }];
 export function messageFor(command, appUrl, support = 'nalpax') {
   const safeSupport = /^[a-zA-Z0-9_]{5,32}$/.test(support) ? support : 'nalpax';
-  if (command === '/help') return { text: 'Vibentry — практический курс по вайбкодингу.\n\nОткройте мини-приложение, подпишитесь на канал и получите первые 5 уроков бесплатно.\n\n/start — открыть курс\n/tariff — тариф, цена и оплата\n/docs — документы и условия\n/support — связаться с автором\n/paysupport — вопросы об оплате\n/reminders — напоминания об уроках\n/offers — персональные скидки', reply_markup: { inline_keyboard: [[{ text: 'Открыть Vibentry', web_app: { url: appUrl } }]] } };
-  if (['/support', '/paysupport'].includes(command)) return { text: `По вопросам курса, доступа и оплаты напишите автору: @${safeSupport}.\n\nНе отправляйте никому токены бота, пароли и платёжные данные.` };
+  if (command === '/help') return { text: 'Vibentry — практический курс по вайбкодингу.\n\nОткройте мини-приложение, подпишитесь на канал и получите первые 5 уроков бесплатно.\n\n/start — открыть курс\n/tariff — тариф, цена и оплата\n/docs — документы и условия\n/support — связаться с автором\n/paysupport — вопросы об оплате\n/reminders — напоминания об уроках\n/offers — персональные скидки', reply_markup: { inline_keyboard: [[{ text: 'Открыть Vibentry', web_app: { url: appUrl } }], MENU_ROW] } };
+  if (['/support', '/paysupport'].includes(command)) return { text: `По вопросам курса, доступа и оплаты напишите автору: @${safeSupport}.\n\nНе отправляйте никому токены бота, пароли и платёжные данные.`, reply_markup: { inline_keyboard: [[{ text: 'Написать автору', url: `https://t.me/${safeSupport}` }], MENU_ROW] } };
   return { text: 'Привет! Это Vibentry 🌱\n\nОт первого запроса к ИИ до своего сайта, портфолио и работы с клиентом.\n\nВнутри — 24 урока, 300 промптов и база материалов. Подпишитесь на канал и заберите первые 5 уроков бесплатно.\n\nНачните с одной маленькой страницы.', reply_markup: { inline_keyboard: [[{ text: 'Начать бесплатно →', web_app: { url: appUrl } }], [{ text: '💳 Тариф и оплата', callback_data: 'tariff' }, { text: '📄 Документы', callback_data: 'docs' }], [{ text: 'Написать автору', url: `https://t.me/${safeSupport}` }]] } };
 }
 const rub = value => `${Number(value).toLocaleString('ru-RU')} ₽`;
@@ -23,10 +25,10 @@ export function tariffMessage(info, appUrl) {
     'Разовая оплата, доступ навсегда, без подписки и автоматических списаний. Доступ закрепляется за вашим аккаунтом Telegram.',
     `Бесплатно: уроки 01–${String(c.freeLessons || 5).padStart(2, '0')} после подписки на канал.`,
   ].join('\n\n');
-  return { text, reply_markup: { inline_keyboard: [[{ text: price ? `Оплатить ${price}` : 'Оплатить', callback_data: 'pay' }], [{ text: 'Открыть курс', web_app: { url: appUrl } }], [{ text: 'Условия покупки', url: `${appUrl}/terms.html` }, { text: 'Тарифы на сайте', url: `${appUrl}/tariffs.html` }]] } };
+  return { text, reply_markup: { inline_keyboard: [[{ text: price ? `Оплатить ${price}` : 'Оплатить', callback_data: 'pay' }], [{ text: 'Открыть курс', web_app: { url: appUrl } }], [{ text: 'Условия покупки', url: `${appUrl}/terms.html` }, { text: 'Тарифы на сайте', url: `${appUrl}/tariffs.html` }], MENU_ROW] } };
 }
 export function docsMessage(appUrl) {
-  return { text: 'Документы Vibentry: тарифы и цены, пользовательское соглашение (в том числе условия возврата), политика конфиденциальности и контакты поддержки.', reply_markup: { inline_keyboard: [[{ text: 'Тарифы и цены', url: `${appUrl}/tariffs.html` }], [{ text: 'Пользовательское соглашение', url: `${appUrl}/terms.html` }], [{ text: 'Политика конфиденциальности', url: `${appUrl}/privacy.html` }], [{ text: 'Контакты', url: `${appUrl}/contacts.html` }]] } };
+  return { text: 'Документы Vibentry: тарифы и цены, пользовательское соглашение (в том числе условия возврата), политика конфиденциальности и контакты поддержки.', reply_markup: { inline_keyboard: [[{ text: 'Тарифы и цены', url: `${appUrl}/tariffs.html` }], [{ text: 'Пользовательское соглашение', url: `${appUrl}/terms.html` }], [{ text: 'Политика конфиденциальности', url: `${appUrl}/privacy.html` }], [{ text: 'Контакты', url: `${appUrl}/contacts.html` }], MENU_ROW] } };
 }
 // «Письмо от автора» after a confirmed purchase: thanks and a 7-day plan built from the next unfinished lessons.
 export function weekPlanMessage({ done = [], titles = [], appUrl, support = 'nalpax' }) {
@@ -60,10 +62,16 @@ export async function handleUpdate(update, { api, store, appUrl, support = proce
       // Never charges here: a live method opens the app's checkout (prices and invoices are created on the server there).
       if (purchase()?.ready) {
         await api('answerCallbackQuery', { callback_query_id: id });
-        await api('sendMessage', { chat_id: from.id, text: 'Оплата открывается в приложении: выберите способ и подтвердите покупку.', reply_markup: { inline_keyboard: [[{ text: 'Перейти к оплате →', web_app: { url: `${appUrl}/#buy` } }]] } });
+        await api('sendMessage', { chat_id: from.id, text: 'Оплата открывается в приложении: выберите способ и подтвердите покупку.', reply_markup: { inline_keyboard: [[{ text: 'Перейти к оплате →', web_app: { url: `${appUrl}/#buy` } }], MENU_ROW] } });
       } else await api('answerCallbackQuery', { callback_query_id: id, text: PAYMENT_STUB, show_alert: true });
-    } else if (data === 'tariff' && from?.id) { await api('answerCallbackQuery', { callback_query_id: id }); await api('sendMessage', { chat_id: from.id, ...tariffMessage(purchase(), appUrl) }); }
-    else if (data === 'docs' && from?.id) { await api('answerCallbackQuery', { callback_query_id: id }); await api('sendMessage', { chat_id: from.id, ...docsMessage(appUrl) }); }
+    } else if (from?.id && ['tariff', 'docs', 'menu'].includes(data)) {
+      await api('answerCallbackQuery', { callback_query_id: id });
+      const message = data === 'tariff' ? tariffMessage(purchase(), appUrl) : data === 'docs' ? docsMessage(appUrl) : messageFor('/start', appUrl, support);
+      // Buttons change the same message, so the chat does not fill up; an old message that cannot be edited gets a new one.
+      const at = update.callback_query.message;
+      try { if (!at?.message_id) throw new Error('no message'); await api('editMessageText', { chat_id: at.chat.id, message_id: at.message_id, ...message }); }
+      catch { await api('sendMessage', { chat_id: from.id, ...message }); }
+    }
     else await api('answerCallbackQuery', { callback_query_id: id });
     return;
   }
@@ -91,11 +99,11 @@ export async function handleUpdate(update, { api, store, appUrl, support = proce
     else if (command === '/id') await api('sendMessage', { chat_id: update.message.chat.id, text: 'Ваш Telegram ID: ' + update.message.from.id });
     else if (command === '/offers') {
       const on = store.offersOn(update.message.from.id);
-      await api('sendMessage', { chat_id: update.message.chat.id, text: on ? 'Персональные предложения включены: иногда бот присылает личный код на скидку (не чаще раза в месяц).' : 'Персональные предложения выключены.', reply_markup: { inline_keyboard: [[{ text: on ? 'Не присылать предложения' : 'Присылать предложения', callback_data: on ? 'offers:off' : 'offers:on' }]] } });
+      await api('sendMessage', { chat_id: update.message.chat.id, text: on ? 'Персональные предложения включены: иногда бот присылает личный код на скидку (не чаще раза в месяц).' : 'Персональные предложения выключены.', reply_markup: { inline_keyboard: [[{ text: on ? 'Не присылать предложения' : 'Присылать предложения', callback_data: on ? 'offers:off' : 'offers:on' }], MENU_ROW] } });
     }
     else if (command === '/reminders') {
       const on = store.remindersOn(update.message.from.id);
-      await api('sendMessage', { chat_id: update.message.chat.id, text: on ? 'Напоминания включены: если вы не заходили в курс 3 дня, бот один раз напомнит, на каком уроке вы остановились.' : 'Напоминания выключены.', reply_markup: { inline_keyboard: [[{ text: on ? 'Выключить напоминания' : 'Включить напоминания', callback_data: on ? 'reminders:off' : 'reminders:on' }]] } });
+      await api('sendMessage', { chat_id: update.message.chat.id, text: on ? 'Напоминания включены: если вы не заходили в курс 3 дня, бот один раз напомнит, на каком уроке вы остановились.' : 'Напоминания выключены.', reply_markup: { inline_keyboard: [[{ text: on ? 'Выключить напоминания' : 'Включить напоминания', callback_data: on ? 'reminders:off' : 'reminders:on' }], MENU_ROW] } });
     }
     else await api('sendMessage', { chat_id: update.message.chat.id, ...messageFor(command, appUrl, support) });
   }

@@ -60,7 +60,8 @@ try { tg?.BackButton.onClick(back); } catch {}
 
 function route() { const [name, params] = (location.hash.slice(1) || 'home').split('?'); return { name, params: new URLSearchParams(params) }; }
 function go(hash) { if (location.hash === hash) render(); else location.hash = hash; }
-function back() { const name = route().name; go(name === 'article' ? urlFor('base') : name === 'lesson' ? urlFor() : '#home'); }
+// Telegram's «Назад»: a reader returns to its list, a trainer to «Практикум», every other screen to the home screen.
+function back() { const { name, params } = route(); go(name === 'article' ? urlFor('base') : name === 'lesson' ? urlFor() : name === 'practice' && params.get('id') ? '#practice' : '#home'); }
 function brand(compact = false) { return `<a href="#home" class="brand ${compact ? 'brand-compact' : ''}" aria-label="Vibentry — главная"><span class="brand-image"><img src="/assets/brand.png" alt="Знак ve. Vibentry" width="64" height="64"></span>${compact ? '' : '<span><strong>Vibentry<span class="brand-dot">.</span></strong><span class="brand-caption">База по вайбкодингу</span></span>'}</a>`; }
 function nav(active) {
   const items = [['home', 'home', 'Главная'], ['materials', 'book', 'Материалы'], ['practice', 'play', 'Практикум'], ['profile', 'user', 'Профиль'], ...(session?.isAdmin ? [['admin', 'sparkle', 'Админка']] : [])];
@@ -264,7 +265,7 @@ function render() {
   closeModal(false);
   if (name === 'lesson') { try { tg?.BackButton.show(); } catch {} reader(Number(params.get('id')), epoch); }
   else if (name === 'article') { try { tg?.BackButton.show(); } catch {} articleReader(params.get('id') || '', epoch); }
-  else { try { tg?.BackButton.hide(); } catch {} app.innerHTML = name === 'materials' ? catalogue(params) : name === 'profile' ? profile() : name === 'admin' ? adminScreen() : name === 'practice' ? practiceView(params) : name === 'next' && !session?.access?.active ? afterFree() : home(); if (name === 'buy') openAccess(params.get('promo') || session?.personalOffer?.code || null); if (name === 'practice' && practiceStarted.has(params.get('id'))) mountPractice(app, { copy }); }
+  else { try { if (name === 'home') tg?.BackButton.hide(); else tg?.BackButton.show(); } catch {} app.innerHTML = name === 'materials' ? catalogue(params) : name === 'profile' ? profile() : name === 'admin' ? adminScreen() : name === 'practice' ? practiceView(params) : name === 'next' && !session?.access?.active ? afterFree() : home(); if (name === 'buy') openAccess(params.get('promo') || session?.personalOffer?.code || null); if (name === 'practice' && practiceStarted.has(params.get('id'))) mountPractice(app, { copy }); }
   window.scrollTo({ top: 0, behavior: 'instant' });
 }
 function toast(message) { const box = document.querySelector('#toast'); box.textContent = message; box.classList.add('visible'); clearTimeout(toastTimer); toastTimer = setTimeout(() => box.classList.remove('visible'), 3000); }
