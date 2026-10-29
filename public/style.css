@@ -330,3 +330,13 @@ body.reading .lesson-article img{-webkit-user-drag:none;pointer-events:none}
 .doc-footer{margin-top:32px;padding-top:16px;border-top:1px solid var(--border);font-size:13px;color:var(--soft)}.doc-warning{color:var(--gold)}
 @media (min-width:700px){.doc-plans{grid-template-columns:1fr 1.4fr}}
 .legal-links{display:flex;flex-wrap:wrap;justify-content:center;gap:4px 6px;margin:14px 0 0}.legal-links a{display:inline-flex;align-items:center;min-height:44px;padding:0 8px;color:var(--soft);font-size:13px;text-underline-offset:3px}
+.welcome-art{height:auto;min-height:196px;padding:8px 0}.welcome-art img{height:190px;width:190px}
+/* After the free lessons: what comes next and the price. */
+.after-free{text-align:center;padding:4px 0 18px}.after-badge{width:64px;height:64px;margin:8px auto 14px;border-radius:50%;display:grid;place-items:center;background:var(--accent);color:var(--accent-ink);animation:pop .5s ease-out both}
+.after-badge svg{width:30px;height:30px}.after-free h1{font-size:32px;line-height:1.15;margin:8px 0 10px}.after-free h1 span{color:var(--accent)}.after-lead{color:var(--muted);font-size:15px;margin:0 0 18px}
+.after-plan{display:grid;gap:8px;text-align:left;margin:0 0 18px}.after-module{display:flex;gap:12px;align-items:center;padding:12px 14px;border:1px solid var(--border);border-radius:14px;background:var(--surface)}
+.after-module strong{display:block;font-size:15px}.after-module small{display:block;color:var(--muted);font-size:13px;line-height:1.4}.after-range{flex:none;min-width:52px;height:40px;display:grid;place-items:center;border-radius:10px;background:var(--surface-2);color:var(--accent);font-weight:700;font-size:13px}
+.after-range svg{width:20px;height:20px}.after-price{display:flex;flex-direction:column;gap:2px;margin:0 0 14px}.after-price strong{font-size:30px;color:var(--gold)}.after-price span{color:var(--soft);font-size:13px}
+.after-free .button{margin-bottom:10px}
+@keyframes pop{0%{transform:scale(.4);opacity:0}70%{transform:scale(1.08);opacity:1}100%{transform:scale(1)}}
+@media (prefers-reduced-motion:reduce){.after-badge{animation:none}}
