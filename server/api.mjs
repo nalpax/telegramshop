@@ -164,7 +164,7 @@ export function makeApi(store, telegram, { lessons = [], resources = {}, prompts
       if (route === 'channels') {
         if (!Array.isArray(data.channels) || data.channels.length > 5) return bad('До 5 каналов или чатов');
         const list = data.channels.map(normalizeChannel);
-        if (list.some(c => !c)) return bad('Проверьте ссылку (https://t.me/имя или приглашение) и ID чата (@имя или -100…)');
+        if (list.some(c => !c)) return bad('Проверьте ссылку (https://t.me/имя или приглашение) и ID чата (@имя или -100…). Для публичного канала @имя должно совпадать со ссылкой — или оставьте ID пустым.');
         if (new Set(list.map(c => c.chatId)).size !== list.length) return bad('Один и тот же чат указан дважды');
         store.saveChannels(list);
         store.log(user.id, 'channels', list.map(c => c.chatId).join(', ') || 'пусто');

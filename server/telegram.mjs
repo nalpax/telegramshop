@@ -33,6 +33,8 @@ export function normalizeChannel(input) {
   let chatId = String(input?.chatId || '').trim();
   if (!chatId && !name.startsWith('+')) chatId = '@' + name;
   if (!/^(@[a-zA-Z][a-zA-Z0-9_]{4,31}|-100\d{5,14})$/.test(chatId)) return null;
+  // For a public link an @ID must name the same chat (Telegram usernames are case-insensitive).
+  if (!name.startsWith('+') && chatId.startsWith('@') && chatId.slice(1).toLowerCase() !== name.toLowerCase()) return null;
   const title = String(input?.title || '').trim().slice(0, 60) || (name.startsWith('+') ? 'Закрытый чат' : '@' + name);
   return { chatId, url, title };
 }

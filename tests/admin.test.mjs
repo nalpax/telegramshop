@@ -67,6 +67,12 @@ test('Required channels are admin-configurable, validated, and every one is chec
     assert.equal((await t.get('/api/lessons/1', 8)).status, 200);
     assert.deepEqual(t.checked.at(-1), ['@vibentry', '-1001234567890']);
     assert.equal(normalizeChannel({ url: 'javascript:alert(1)' }), null);
+    // A public link and an @ID that point to different chats: the button would lead to one channel and the check would ask about another.
+    assert.equal(normalizeChannel({ url: 'https://t.me/vibeentry', chatId: '@vibentry' }), null);
+    assert.equal(normalizeChannel({ url: 'https://t.me/vibeentry', chatId: '@VibeEntry' }).chatId, '@VibeEntry');
+    assert.equal(normalizeChannel({ url: 'https://t.me/vibeentry' }).chatId, '@vibeentry');
+    assert.equal(normalizeChannel({ url: 'https://t.me/vibeentry', chatId: '-1001234567890' }).chatId, '-1001234567890');
+    assert.equal(normalizeChannel({ url: 'https://t.me/+AbCdEfGh123', chatId: '@vibentry' }).chatId, '@vibentry');
     assert.equal((await t.post('/api/admin/channels', { channels: [] })).status, 200);
     assert.equal((await t.get('/api/lessons/1', 8)).status, 403, 'an empty list lets nobody in');
   } finally { await t.done(); }
