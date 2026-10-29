@@ -1,4 +1,5 @@
 import { icon, art } from './icons.js';
+import { projectSummary, projectScreen, readProject, saveProject } from './project.js';
 import { FREE_LESSONS, modules, lessons, materials } from './course.js';
 import { renderMarkdown } from './markdown.js';
 import { createAdmin, planBadge } from './admin.js';
@@ -55,7 +56,7 @@ async function loadLibrary(tab, force = false) {
 }
 function refreshResults() { const box = document.querySelector('#catalogue-results'); if (box && route().name === 'materials') box.innerHTML = catalogueBody(catalogueTab); }
 
-try { tg?.ready(); tg?.expand(); tg?.setHeaderColor('#061b12'); tg?.setBackgroundColor('#061b12'); } catch {}
+try { tg?.ready(); tg?.expand(); tg?.setHeaderColor('#11231a'); tg?.setBackgroundColor('#11231a'); } catch {}
 try { tg?.BackButton.onClick(back); } catch {}
 
 function route() { const [name, params] = (location.hash.slice(1) || 'home').split('?'); return { name, params: new URLSearchParams(params) }; }
@@ -64,28 +65,21 @@ function go(hash) { if (location.hash === hash) render(); else location.hash = h
 function back() { const { name, params } = route(); go(name === 'article' ? urlFor('base') : name === 'lesson' ? urlFor() : name === 'practice' && params.get('id') ? '#practice' : '#home'); }
 function brand(compact = false) { return `<a href="#home" class="brand ${compact ? 'brand-compact' : ''}" aria-label="Vibentry — главная"><span class="brand-image"><img src="/assets/brand.png" alt="Знак ve. Vibentry" width="64" height="64"></span>${compact ? '' : '<span><strong>Vibentry<span class="brand-dot">.</span></strong><span class="brand-caption">База по вайбкодингу</span></span>'}</a>`; }
 function nav(active) {
-  const items = [['home', 'home', 'Главная'], ['materials', 'book', 'Материалы'], ['practice', 'play', 'Практикум'], ['profile', 'user', 'Профиль'], ...(session?.isAdmin ? [['admin', 'sparkle', 'Админка']] : [])];
-  return `<nav class="bottom-nav" aria-label="Основная навигация"><a href="#home" class="nav-brand"><img src="/assets/brand.png" alt="" width="40" height="40"><span><strong>Vibentry</strong><small>курс по вайбкодингу</small></span></a>${items.map(([id, glyph, label]) => `<a href="#${id}" class="nav-item ${active === id ? 'is-active' : ''}" ${active === id ? 'aria-current="page"' : ''}>${icon(glyph)}<span>${label}</span></a>`).join('')}${planChip()}</nav>`;
+  const items = [['home', 'home', 'Главная'], ['materials', 'book', 'Материалы'], ['practice', 'play', 'Практикум'], ['profile', 'user', 'Профиль'], ...(session?.isAdmin ? [['admin', 'user', 'Админка']] : [])];
+  return `<nav class="bottom-nav" aria-label="Основная навигация"><a href="#home" class="nav-brand"><span class="nav-logo"><img src="/assets/brand.png" alt="Знак ve. Vibentry" width="54" height="54"></span><span><strong>Vibentry</strong><small>Учебник вайбкодера</small></span></a><span class="nav-caption">РАБОЧЕЕ МЕСТО</span>${items.map(([id, glyph, label]) => `<a href="#${id}" class="nav-item ${active === id ? 'is-active' : ''}" ${active === id ? 'aria-current="page"' : ''}>${icon(glyph)}<span>${label}</span></a>`).join('')}<a class="nav-item nav-project ${active === 'project' ? 'is-active' : ''}" href="#project" ${active === 'project' ? 'aria-current="page"' : ''}>${icon('file')}<span>Мой проект</span></a><div class="nav-footer"><p>Сначала одна страница.<br>Остальное — по ходу.</p><span>VIBENTRY / V.02</span></div>${planChip()}</nav>`;
 }
 function planChip() { return session?.user ? `<div class="nav-plan">${planBadge(session.access?.active ? 'pro' : 'free')}<span>${e(session.user.first_name)}</span></div>` : ''; }
 function heading(kicker, title, caption = '') { return `<div class="section-heading"><div><p class="eyebrow">${kicker}</p><h2>${title}</h2></div>${caption ? `<span class="section-meta">${caption}</span>` : ''}</div>`; }
-function hero() {
-  return `<section class="hero" aria-labelledby="hero-title"><div class="hero-grid" aria-hidden="true"></div><div class="hero-copy"><span class="eyebrow">ПРАКТИЧЕСКИЙ КУРС</span><h1 id="hero-title">От идеи —<br>к своему сайту<span>.</span></h1><p>Учитесь. Собирайте. Запускайте.</p></div><img class="hero-art" src="/assets/hero.png" width="220" height="220" alt="" fetchpriority="high"></section>`;
-}
-function tile(title, subtitle, kind, hash, action = '') { return `<a class="quick-tile tile-${kind}" href="${hash}" ${action ? `data-action="${action}"` : ''}><div><h3>${title}</h3><p>${subtitle}</p></div>${art(kind)}<span class="tile-arrow">${icon('arrow')}</span></a>`; }
 function home() {
-  const next = lessons[progress.last - 1];
+  const next = lessons[progress.last - 1] || lessons[0];
   const freeDone = lessons.filter(l => l.free).every(l => progress.done.includes(l.id)) && !session?.access?.active;
-  const eyebrow = freeDone ? 'БЕСПЛАТНЫЕ УРОКИ ПРОЙДЕНЫ' : progress.done.length ? 'ВАШ СЛЕДУЮЩИЙ ШАГ' : 'НАЧНИТЕ С МАЛЕНЬКОГО';
-  const title = freeDone ? 'Продолжим создавать?' : `${String(next.id).padStart(2, '0')} · ${e(next.title)}`;
-  const label = freeDone ? 'Посмотреть полную программу' : progress.done.length ? 'Продолжить урок' : 'Начать бесплатно';
-  const percent = Math.round(progress.done.length / 24 * 100);
-  return `<header class="home-header">${brand()}</header>
-  ${hero()}
-  <section class="continue-card" aria-labelledby="continue-title"><div class="continue-top"><span class="eyebrow">${eyebrow}</span>${icon(freeDone ? 'check' : 'sparkle')}</div><h2 id="continue-title">${title}</h2><div class="progress-caption"><span>Пройдено ${progress.done.length} из 24 уроков</span><span>${percent}%</span></div><progress max="24" value="${progress.done.length}" aria-label="Прогресс курса"></progress>${freeDone ? `<a class="button button-primary" href="#next">${label}${icon('arrow')}</a>` : `<button class="button button-primary" data-action="lesson" data-id="${next.id}">${label}${icon('arrow')}</button>`}</section>
-  <section class="quick-section" aria-labelledby="quick-title"><div class="section-heading"><h2 id="quick-title">Быстрый доступ</h2></div><div class="quick-grid">${tile('Уроки', `24 урока,<br>${FREE_LESSONS} бесплатно`, 'book', urlFor())}${tile('Промпты', '300 запросов<br>для ИИ', 'prompts', urlFor('prompts'))}${tile('База', 'Инструменты, ниши,<br>клиенты, заказы', 'files', urlFor('base'))}${tile(session?.access?.active ? 'Мой доступ' : 'Полный доступ', session?.access?.active ? 'Всё открыто,<br>навсегда' : priceLabel() ? `${priceLabel()}<br>навсегда` : 'Один платёж,<br>навсегда', 'plane', '#access', 'access')}</div></section>
-  <a class="practice-teaser" href="#practice"><span class="practice-glyph">${icon('play')}</span><span><strong>Практикум</strong><small>Конструктор промпта, квиз, калькулятор оценки и проверка перед сдачей${session?.practice && !session.practice.unlimited ? ` · бесплатно ${session.practice.remaining} из ${session.practice.limit} запусков` : ''}</small></span>${icon('arrow')}</a>
-  <p class="home-note">Одна сделанная страница полезнее десяти прочитанных.</p>${nav('home')}`;
+  const action = freeDone ? `<a class="button button-primary" href="#next">Посмотреть полную программу${icon('arrow')}</a>` : `<button class="button button-primary" data-action="lesson" data-id="${next.id}">${progress.done.length ? 'Продолжить урок' : 'Начать бесплатно'}${icon('arrow')}</button>`;
+  return `<header class="home-header">${brand()}<span class="workspace-status">${config.preview ? 'Демонстрация' : session?.access?.active ? 'Полный доступ' : 'Бесплатный старт'}</span></header>
+  <div class="workspace-topline"><span>ОБЗОР</span><span>VIBENTRY / УЧЕБНИК ВАЙБКОДЕРА</span></div>
+  <section class="desk-intro"><div><p class="eyebrow">ОТ ИДЕИ ДО ПУБЛИКАЦИИ</p><h1>Знания — в дело.<br><em>И в свой сайт.</em></h1><p>Уроки, инструменты и практика.<br>Один проект от начала до живой ссылки.</p></div><a class="course-index" href="#materials"><strong>${String(progress.done.length).padStart(2, '0')}<span>/ 24</span></strong><span>уроков пройдено ${icon('arrow')}</span></a></section>
+  <div class="desk-grid"><section class="continue-card" aria-labelledby="continue-title"><div class="panel-heading"><span class="eyebrow">${freeDone ? 'СЛЕДУЮЩИЙ ЭТАП' : 'СЕЙЧАС В КУРСЕ'}</span><span class="paper-mark">УРОК ${String(next.id).padStart(2, '0')}</span></div><div class="lesson-card-copy"><span class="lesson-chapter">${e(modules.find(m => m.id === next.module)?.title || 'Первый сайт')}</span><h2 id="continue-title">${freeDone ? 'Первая страница готова. Что дальше?' : e(next.title)}</h2><p>${freeDone ? 'Дизайн, портфолио и работа с клиентами — в следующих модулях.' : 'Прочитайте урок, выполните задание и сохраните результат.'}</p></div><div class="lesson-card-bottom">${action}<span class="paper-page">${String(next.id).padStart(2, '0')}<span> / 24</span></span></div><div class="progress-caption"><span>Пройдено ${progress.done.length} из 24 уроков</span><span>${Math.round(progress.done.length / 24 * 100)}%</span></div><progress max="24" value="${progress.done.length}" aria-label="Прогресс курса"></progress></section>
+  ${projectSummary(session?.user?.id)}</div>
+  <section class="workbench"><div class="section-heading"><h2>Под рукой</h2><a href="#materials">Все материалы ${icon('arrow')}</a></div><div class="workbench-grid"><a class="workbench-item" href="#practice?id=builder"><span class="tool-symbol">{ }</span><span class="tool-index">01 / ИНСТРУМЕНТ</span><h3>Собрать промпт</h3><p>Пять вопросов — и задача для агента готова.</p><span class="tool-link">Открыть конструктор ${icon('arrow')}</span></a><a class="workbench-item" href="#materials?tab=base"><span class="tool-symbol">${icon('file')}</span><span class="tool-index">02 / БАЗА</span><h3>Найти материал</h3><p>Инструменты, ниши, клиенты и работа с заказами.</p><span class="tool-link">Открыть библиотеку ${icon('arrow')}</span></a><a class="workbench-item" href="#practice"><span class="tool-symbol">${icon('play')}</span><span class="tool-index">03 / ПРАКТИКА</span><h3>Проверить себя</h3><p>Учебные ситуации, оценка работ и чек-листы.</p><span class="tool-link">К тренажёрам ${icon('arrow')}</span></a></div></section><footer class="desk-footer"><span>Хорошая работа начинается с понятной задачи.</span><button data-action="support">Вопрос автору ${icon('arrow')}</button></footer>${nav('home')}`;
 }
 // Shown after the last free lesson: what the buyer gets next, the price, one clear button. No invented reviews or income.
 function afterFree() {
@@ -265,7 +259,7 @@ function render() {
   closeModal(false);
   if (name === 'lesson') { try { tg?.BackButton.show(); } catch {} reader(Number(params.get('id')), epoch); }
   else if (name === 'article') { try { tg?.BackButton.show(); } catch {} articleReader(params.get('id') || '', epoch); }
-  else { try { if (name === 'home') tg?.BackButton.hide(); else tg?.BackButton.show(); } catch {} app.innerHTML = name === 'materials' ? catalogue(params) : name === 'profile' ? profile() : name === 'admin' ? adminScreen() : name === 'practice' ? practiceView(params) : name === 'next' && !session?.access?.active ? afterFree() : home(); if (name === 'buy') openAccess(params.get('promo') || session?.personalOffer?.code || null); if (name === 'practice' && practiceStarted.has(params.get('id'))) mountPractice(app, { copy }); }
+  else { try { if (name === 'home') tg?.BackButton.hide(); else tg?.BackButton.show(); } catch {} app.innerHTML = name === 'materials' ? catalogue(params) : name === 'profile' ? profile() : name === 'admin' ? adminScreen() : name === 'project' ? `${projectScreen(session?.user?.id)}${nav('project')}` : name === 'practice' ? practiceView(params) : name === 'next' && !session?.access?.active ? afterFree() : home(); if (name === 'buy') openAccess(params.get('promo') || session?.personalOffer?.code || null); if (name === 'practice' && practiceStarted.has(params.get('id'))) mountPractice(app, { copy }); }
   window.scrollTo({ top: 0, behavior: 'instant' });
 }
 function toast(message) { const box = document.querySelector('#toast'); box.textContent = message; box.classList.add('visible'); clearTimeout(toastTimer); toastTimer = setTimeout(() => box.classList.remove('visible'), 3000); }
@@ -554,6 +548,7 @@ async function pay(button) {
 function practiceView(params) {
   const id = params.get('id');
   if (!id) return `${practiceList(session?.practice)}${nav('practice')}`;
+  if (config.preview && ['builder', 'estimate'].includes(id)) practiceStarted.add(id);
   if (practiceStarted.has(id)) return `${practiceScreen(id)}${nav('practice')}`;
   if (practiceBlocked.has(id) || (session?.practice && !session.practice.unlimited && session.practice.remaining <= 0)) return `${practicePaywall(id, priceLabel())}${nav('practice')}`;
   startPractice(id, renderEpoch);
@@ -582,3 +577,22 @@ async function resetAllProgress(button) {
   try { if (!config.preview) await sendApi('/api/progress', { reset: true }); resetProgress(); closeModal(); render(); toast('Можно начинать заново.'); }
   catch { toast('Не удалось сбросить прогресс. Попробуйте ещё раз.'); button.disabled = false; }
 }
+
+// The project notebook is explicitly per-device; paid content and course progress stay on the server.
+document.addEventListener('submit', event => {
+  if (event.target.id !== 'project-form') return;
+  event.preventDefault();
+  const values = new FormData(event.target);
+  const p = readProject(session?.user?.id);
+  p.title = String(values.get('title') || '').trim().slice(0, 100);
+  p.url = String(values.get('url') || '').trim().slice(0, 300);
+  if (p.url) { try { const u = new URL(p.url); if (!['http:', 'https:'].includes(u.protocol)) throw new Error(); } catch { toast('Укажите адрес сайта, начинающийся с https://'); return; } }
+  if (!saveProject(session?.user?.id, p)) return toast('Не удалось сохранить запись на устройстве.');
+  render(); toast('Проект сохранён.');
+});
+document.addEventListener('change', event => {
+  if (event.target.name !== 'project-stage') return;
+  const p = readProject(session?.user?.id); const n = Number(event.target.value);
+  p.done = event.target.checked ? [...new Set([...p.done, n])] : p.done.filter(x => x !== n);
+  if (saveProject(session?.user?.id, p)) render();
+});
