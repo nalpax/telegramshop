@@ -16,7 +16,14 @@ export class VibentryApp extends DurableObject {
     for (const [key, value] of Object.entries(env)) if (typeof value === 'string') process.env[key] = value;
     this.handle = makeWorkerApp({ store: new StoreCore(durableSql(ctx.storage.sql)), telegram: new Telegram(env.BOT_TOKEN), content, env });
   }
-  fetch(request) { return this.handle(request); }
+  async fetch(request) {
+    // Hourly alarm for bot reminders; scheduled once per object start if none is pending.
+    if (!this.alarmChecked) { this.alarmChecked = true; try { if (!(await this.ctx.storage.getAlarm())) await this.ctx.storage.setAlarm(Date.now() + 60000); } catch {} }
+    return this.handle(request);
+  }
+  async alarm() {
+    try { await this.handle.reminders(); } finally { await this.ctx.storage.setAlarm(Date.now() + 3600000); }
+  }
 }
 
 export default {

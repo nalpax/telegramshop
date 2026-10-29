@@ -148,3 +148,15 @@ test('Worker /health shows the bot\'s status in each required channel', async ()
   const health = await (await handle(new Request(APP + '/health'))).json();
   assert.deepEqual(health.channels, [{ chat: '@goodchannel', bot: 'administrator' }, { chat: '@otherchannel', bot: 'error', code: 400, description: 'Bad Request: member list is inaccessible' }]);
 });
+test('Worker: the webhook is re-set when reminder buttons (callback_query) are missing; reminders run through the worker', async () => {
+  const calls = [];
+  const api = async (method, payload) => { calls.push({ method, payload }); if (method === 'getWebhookInfo') return { url: APP + WEBHOOK_PATH, allowed_updates: ['message', 'pre_checkout_query'] }; return true; };
+  const store = new Store(':memory:');
+  const handle = makeWorkerApp({ store, telegram: { isMember: async () => true, api }, content: { lessons: [{ id: 1, title: 'Первый' }, { id: 2, title: 'Второй' }] }, env: { BOT_TOKEN: TOKEN, APP_URL: APP }, log: () => {} });
+  await handle(new Request(APP + '/health'));
+  assert.deepEqual(calls.find(c => c.method === 'setWebhook').payload.allowed_updates, ['message', 'pre_checkout_query', 'callback_query']);
+  const now = Date.parse('2026-11-02T09:00:00Z');
+  store.upsertUser({ id: 3, first_name: 'U' }, now - 4 * 86400000); store.db.prepare('INSERT INTO progress VALUES (3,1,?)').run(now - 4 * 86400000);
+  assert.equal(await handle.reminders(now), 1);
+  assert.match(calls.at(-1).payload.text, /уроке 02 «Второй»/);
+});

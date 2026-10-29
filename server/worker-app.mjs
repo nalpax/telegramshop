@@ -2,12 +2,13 @@
 // The same api.mjs answers /api/* as on a Node server; the bot receives updates by webhook instead of long polling.
 import { createHmac } from 'node:crypto';
 import { makeApi } from './api.mjs';
-import { configureBot, handleUpdate, validateAppUrl } from './bot-core.mjs';
+import { configureBot, handleUpdate, sendReminders, validateAppUrl } from './bot-core.mjs';
 import { safeEqual } from './providers/index.mjs';
 import { channelsFor } from './telegram.mjs';
 import { MIME, SECURITY_HEADERS, body, errorStatus, json } from './http-common.mjs';
 
 export const WEBHOOK_PATH = '/telegram/webhook';
+export const ALLOWED_UPDATES = ['message', 'pre_checkout_query', 'callback_query'];
 // Telegram echoes this in X-Telegram-Bot-Api-Secret-Token. Derived from the token, so there is no extra secret to manage.
 export const webhookSecret = token => createHmac('sha256', String(token)).update('vibentry-telegram-webhook').digest('hex');
 
@@ -41,7 +42,9 @@ export function makeWorkerApp({ store, telegram, content, env = process.env, log
       const info = await telegramApi('getWebhookInfo');
       if (info.url && info.url !== target) return 'webhook-conflict';
       step = 'setWebhook';
-      if (info.url !== target) await telegramApi('setWebhook', { url: target, secret_token: webhookSecret(env.BOT_TOKEN), allowed_updates: ['message', 'pre_checkout_query'] });
+      // Re-set when the update types changed (e.g. reminder buttons need callback_query).
+      const types = info.allowed_updates || [];
+      if (info.url !== target || ALLOWED_UPDATES.some(type => !types.includes(type))) await telegramApi('setWebhook', { url: target, secret_token: webhookSecret(env.BOT_TOKEN), allowed_updates: ALLOWED_UPDATES });
       step = 'configureBot';
       await configureBot(telegramApi, appUrl);
       botError = null;
@@ -69,7 +72,7 @@ export function makeWorkerApp({ store, telegram, content, env = process.env, log
     channelCheck = { at: Date.now(), value };
     return value;
   }
-  return async function handle(request) {
+  const handle = async function handle(request) {
     const url = new URL(request.url);
     const reply = (status, value) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
     if (url.pathname === WEBHOOK_PATH) {
@@ -95,6 +98,9 @@ export function makeWorkerApp({ store, telegram, content, env = process.env, log
       return reply(404, { error: 'Not found' });
     } catch (error) { return reply(errorStatus(error), { error: 'Request could not be completed' }); }
   };
+  // Called hourly by the Durable Object alarm (server/worker.mjs).
+  handle.reminders = (now = Date.now()) => (env.BOT_TOKEN && validateAppUrl(appUrl) ? sendReminders({ store, api: telegramApi, appUrl, titles: (content.lessons || []).map(l => l.title), now, log }) : Promise.resolve(0));
+  return handle;
 }
 
 // Static files from public/ only, same rules as the Node server: no dot-files, known types only, GET/HEAD.

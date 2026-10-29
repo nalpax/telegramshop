@@ -16,6 +16,7 @@ export class StoreCore {
     // No PRAGMA here: Durable Objects do not allow every PRAGMA. An existing column is reported as "duplicate column".
     const addColumn = (table, column, ddl) => { try { this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`); } catch (error) { if (!/duplicate column/i.test(String(error?.message))) throw error; } };
     addColumn('orders', 'promo', 'TEXT'); addColumn('orders', 'provider', "TEXT NOT NULL DEFAULT 'stars'"); addColumn('orders', 'currency', 'TEXT'); addColumn('orders', 'amount', 'REAL');
+    addColumn('users', 'reminders_off', 'INTEGER NOT NULL DEFAULT 0'); addColumn('users', 'reminded_at', 'INTEGER');
     addColumn('payments', 'provider', "TEXT NOT NULL DEFAULT 'stars'"); addColumn('payments', 'amount', 'REAL'); addColumn('payments', 'currency', 'TEXT');
     this.db.exec(`CREATE TABLE IF NOT EXISTS favorites (user_id INTEGER NOT NULL, prompt_id TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY(user_id, prompt_id));
       CREATE TABLE IF NOT EXISTS task_checks (user_id INTEGER NOT NULL, lesson_id INTEGER NOT NULL, item INTEGER NOT NULL, PRIMARY KEY(user_id, lesson_id, item));`);
@@ -60,6 +61,14 @@ export class StoreCore {
   getProgress(userId) { return this.db.prepare('SELECT lesson_id FROM progress WHERE user_id=? ORDER BY lesson_id').all(userId).map(r => r.lesson_id); }
   complete(userId, lesson) { this.db.prepare('INSERT OR IGNORE INTO progress VALUES (?,?,?)').run(userId, lesson, Date.now()); }
   reset(userId) { this.db.prepare('DELETE FROM progress WHERE user_id=?').run(userId); this.db.prepare('DELETE FROM task_checks WHERE user_id=?').run(userId); }
+  // ---- reminders: one message after a quiet pause (server/bot-core.mjs sendReminders) ----
+  reminderCandidates() {
+    return this.db.prepare(`SELECT u.id, u.last_seen, u.reminded_at, (SELECT MAX(completed_at) FROM progress p WHERE p.user_id=u.id) AS last_done
+      FROM users u WHERE u.reminders_off=0 AND EXISTS(SELECT 1 FROM progress p WHERE p.user_id=u.id)`).all();
+  }
+  markReminded(userId, now = Date.now()) { this.db.prepare('UPDATE users SET reminded_at=? WHERE id=?').run(now, userId); }
+  setReminders(userId, on) { this.db.prepare('UPDATE users SET reminders_off=? WHERE id=?').run(on ? 0 : 1, userId); }
+  remindersOn(userId) { return !this.db.prepare('SELECT reminders_off FROM users WHERE id=?').get(userId)?.reminders_off; }
   // ---- favourite prompts and ticked checklist items in lessons ----
   marks(userId) {
     const favorites = this.db.prepare('SELECT prompt_id FROM favorites WHERE user_id=? ORDER BY prompt_id').all(userId).map(r => r.prompt_id);

@@ -4,7 +4,8 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { Store } from './store.mjs';
-import { configureBot, handleUpdate, validateAppUrl } from './bot-core.mjs';
+import { configureBot, handleUpdate, sendReminders, validateAppUrl } from './bot-core.mjs';
+import { loadContent } from './content-node.mjs';
 export { messageFor, validateAppUrl } from './bot-core.mjs';
 
 async function run() {
@@ -26,10 +27,14 @@ async function run() {
     await configureBot(api, appUrl);
     const store = new Store();
     console.log(`Vibentry bot @${me.username}: polling started. Telegram Stars handler enabled.`);
+    // Hourly bot reminders (one message after 3 quiet days, see bot-core.mjs).
+    const titles = (await loadContent()).lessons.map(l => l.title);
+    const remind = () => sendReminders({ store, api, appUrl, titles }).catch(() => console.error('Reminders failed. No tokens or user data logged.'));
+    const timer = setInterval(remind, 3600000); controller.signal.addEventListener('abort', () => clearInterval(timer)); remind();
     let offset = 0;
     while (!controller.signal.aborted) {
       try {
-        const updates = await api('getUpdates', { offset, timeout: 25, allowed_updates: ['message', 'pre_checkout_query'] }, 35000);
+        const updates = await api('getUpdates', { offset, timeout: 25, allowed_updates: ['message', 'pre_checkout_query', 'callback_query'] }, 35000);
         for (const update of updates) {
           await handleUpdate(update, { api, store, appUrl });
           offset = update.update_id + 1;
